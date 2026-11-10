@@ -373,6 +373,7 @@ main {
   width: 100%;
 }
 .link-btn {
+  white-space: nowrap;
   background: none;
   border: none;
   color: var(--btc);
@@ -985,11 +986,25 @@ details summary {
     gap: 28px;
   }
   .top {
-    gap: 12px;
+    gap: 8px 12px;
+    flex-wrap: wrap;
   }
-  .top nav,
   .top .pill {
     display: none;
+  }
+  .top nav {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
+    gap: 18px;
+    padding-top: 2px;
+    font-size: 14px;
+  }
+  .diagram-wrap {
+    overflow-x: auto;
+  }
+  .diagram-wrap .diagram {
+    min-width: 680px;
   }
   .offer {
     grid-template-columns: 1fr 1fr;

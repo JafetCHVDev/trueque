@@ -53,19 +53,22 @@ export function useMarket(intervalMs = 20_000) {
     try {
       const [all, cfg] = await Promise.all([listOffers(undefined, 100), getConfig()]);
       setConfig(cfg);
-      const open = all.filter((o) => o.status === "Open" && o.deposit_address);
-      await Promise.all(
-        open.map(async (o) => {
-          try {
-            const f = await cachedFunding(o.deposit_address!, o.sats);
-            if (f) funding.current.set(o.id, f);
-          } catch {
-            /* keep last known */
-          }
-        }),
-      );
-      setOffers(all.map((o) => ({ ...o, funding: funding.current.get(o.id) })));
+      const render = () => setOffers(all.map((o) => ({ ...o, funding: funding.current.get(o.id) })));
+      // Show the offers right away; funding fills in as each escrow is checked.
+      render();
       setError(null);
+      const open = all.filter((o) => o.status === "Open" && o.deposit_address);
+      for (const o of open) {
+        cachedFunding(o.deposit_address!, o.sats).then(
+          (f) => {
+            if (f) {
+              funding.current.set(o.id, f);
+              render();
+            }
+          },
+          () => {},
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
