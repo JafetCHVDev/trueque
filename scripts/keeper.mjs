@@ -18,7 +18,7 @@ const firstSeenUnsigned = new Map();
 
 async function known(txid) {
   try {
-    await esplora(`/tx/${txid}/status`);
+    await esplora(`/tx/${txid}`); // /status would answer even for unknown txids
     return true;
   } catch {
     return false;

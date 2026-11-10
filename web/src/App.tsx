@@ -46,7 +46,7 @@ export default function App() {
           <section className="page narrow">
             <p className="eyebrow">Sell Bitcoin</p>
             <h1>Open an offer</h1>
-            <p className="lead">Name your amount and your price in NEAR. Buyers pay the contract; you are paid the moment their BTC payout is signed.</p>
+            <p className="lead">Name your amount and your price in USDC or NEAR. Buyers pay the contract; you are paid the moment their BTC payout is signed.</p>
             <SellForm session={session} onConnect={openSignin} onCreated={(id) => go(`#/offer/${id}`)} />
           </section>
         ) : route.startsWith("#/activity") ? (

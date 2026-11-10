@@ -39,10 +39,12 @@ export class BroadcastError extends Error {}
 export const getUtxos = async (address: string): Promise<EsploraUtxo[]> => JSON.parse(await esplora(`/address/${address}/utxo`));
 export const tipHeight = async () => Number(await esplora("/blocks/tip/height"));
 
+/** Esplora's /tx/:id/status answers {confirmed:false} even for unknown
+ * transactions, so existence is checked on /tx/:id, which 404s. */
 export async function txStatus(txid: string): Promise<{ found: boolean; confirmed: boolean; block_height?: number }> {
   try {
-    const s = JSON.parse(await esplora(`/tx/${txid}/status`));
-    return { found: true, confirmed: s.confirmed, block_height: s.block_height };
+    const tx = JSON.parse(await esplora(`/tx/${txid}`));
+    return { found: true, confirmed: !!tx.status?.confirmed, block_height: tx.status?.block_height };
   } catch {
     return { found: false, confirmed: false };
   }

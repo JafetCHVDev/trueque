@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fmtSats, isSignetAddress, loadBtcWallet } from "./btc";
 import { GAS_DEFAULT, USDC_TOKEN } from "./config";
 import { useReferenceRate } from "./market";
@@ -15,6 +15,12 @@ export function SellForm({ session, onCreated, onConnect }: { session: Session |
   const [refund, setRefund] = useState(() => loadBtcWallet()?.address ?? "");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const touched = useRef(false);
+  useEffect(() => {
+    // Start at the market price once the reference loads, unless the user typed one.
+    if (ref && !touched.current) setPrice(((ref.usdPerBtc * Number(sats)) / 1e8).toFixed(2));
+  }, [ref]);
 
   const satsN = Number(sats);
   const priceN = Number(price);
@@ -76,7 +82,10 @@ export function SellForm({ session, onCreated, onConnect }: { session: Session |
         </label>
         <label className="field">
           <span>Price ({currency})</span>
-          <input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d.]/g, ""))} />
+          <input inputMode="decimal" value={price} onChange={(e) => {
+              touched.current = true;
+              setPrice(e.target.value.replace(/[^\d.]/g, ""));
+            }} />
           <span className="muted small">
             {implied ? `${implied.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${currency} per BTC` : " "}
             {premium !== null && (
