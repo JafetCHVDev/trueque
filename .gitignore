@@ -1,0 +1,7 @@
+node_modules/
+target/
+dist/
+.secrets/
+.env
+.env.local
+*.local.json

@@ -1,0 +1,19 @@
+{
+  "name": "trueque",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "test:contract": "cd contract && cargo test",
+    "verify:vector": "node scripts/verify-vector.mjs",
+    "build:contract": "cd contract && cargo near build non-reproducible-wasm"
+  },
+  "devDependencies": {
+    "bitcoinjs-lib": "^7.0.5",
+    "ecpair": "^3.0.2",
+    "near-api-js": "^7.4.0",
+    "tiny-secp256k1": "^2.2.5"
+  }
+}

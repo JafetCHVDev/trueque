@@ -1,0 +1,58 @@
+{
+  "contract": "market.trueque.testnet",
+  "network": "NEAR testnet + Bitcoin signet",
+  "started": "2026-11-10T15:47:13.744Z",
+  "steps": [
+    {
+      "step": "Maker opens an offer",
+      "id": 0,
+      "sats": 2000,
+      "price_near": "0.25",
+      "deposit_address": "tb1qa52l96j8nhjexdzv227a60wac98mp9qnfarsce",
+      "near_tx": "https://testnet.nearblocks.io/txns/7AovWi5DfkGaPvv6WJ4VrnXwRkk4u4byMbmdkRDg2chR"
+    },
+    {
+      "step": "Deposit address independently re-derived from the MPC contract",
+      "path": "trueque/19878b76/0",
+      "derived_key": "secp256k1:3vdz8rXZCRUmizPX3ypVRyQPiGRwNNbze44XP1b6JVVhjderHmVPwG2qnhwx8yGDyWobw93V8Lcz7j2YT6DsxRPP",
+      "address": "tb1qa52l96j8nhjexdzv227a60wac98mp9qnfarsce"
+    },
+    {
+      "step": "Maker deposits BTC at the offer address",
+      "btc_txid": "76fe8cb626fe2c3165b8118f55dfb14d6bb909a2f3c7d843d768c563838f8b5c",
+      "link": "https://mempool.space/signet/tx/76fe8cb626fe2c3165b8118f55dfb14d6bb909a2f3c7d843d768c563838f8b5c"
+    },
+    {
+      "step": "Taker pays NEAR into escrow; contract requests MPC signatures",
+      "near_tx": "https://testnet.nearblocks.io/txns/C4KeiRNLYVE55g4CC3Fpce6CSDNzsnMJvrabF2cE7zxr",
+      "fee_sats": 142,
+      "inputs": 1
+    },
+    {
+      "step": "MPC signed, signature verified on chain, maker paid",
+      "status": "Settled",
+      "signed": "1/1",
+      "seconds": 0,
+      "btc_txid": "5bc8e5ce0e6f29a9d0da1cdda52f2f1b50f02634df3e59f5ade5641dd82a4da1"
+    },
+    {
+      "step": "Release transaction broadcast to Bitcoin signet",
+      "btc_txid": "5bc8e5ce0e6f29a9d0da1cdda52f2f1b50f02634df3e59f5ade5641dd82a4da1",
+      "to": "tb1qtfwzh58sy9n9mnl8j49y0d8t8fyu7947lykvgf",
+      "sats": 1858,
+      "link": "https://mempool.space/signet/tx/5bc8e5ce0e6f29a9d0da1cdda52f2f1b50f02634df3e59f5ade5641dd82a4da1"
+    }
+  ],
+  "finished": "2026-11-10T15:48:29.658Z",
+  "config": {
+    "owner": "market.trueque.testnet",
+    "mpc_contract": "v1.signer-prod.testnet",
+    "network": "signet",
+    "fee_bps": 30,
+    "offer_bond": "20000000000000000000000",
+    "offers": 1,
+    "trades": 1,
+    "volume_sats": 2000,
+    "volume_near": "250000000000000000000000"
+  }
+}
