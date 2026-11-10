@@ -1,0 +1,69 @@
+{
+  "contract": "market.trueque.testnet",
+  "currency": "USDC (usdc.trueque.testnet)",
+  "network": "NEAR testnet + Bitcoin signet",
+  "started": "2026-11-10T16:12:32.257Z",
+  "steps": [
+    {
+      "step": "Maker opens an offer",
+      "id": 4,
+      "sats": 1500,
+      "price": "1.5 USDC",
+      "deposit_address": "tb1qrrgp0huy3wsahzjqp4xdm8lctp757ht08v5ulu",
+      "near_tx": "https://testnet.nearblocks.io/txns/9ummRTobE1HXohb4RtgBi9FZ7TUKp86WdMfjeanjomRU"
+    },
+    {
+      "step": "Deposit address independently re-derived from the MPC contract",
+      "path": "trueque/19878b76/4",
+      "derived_key": "secp256k1:Bcipibo1o1wQ81jDEVQBr8ttMzVZTNznGG7Rb5T31rLAGhLQkAe7U2avN9eyJEsh9YqWGYZU5oAMMLUsV3rpPQb",
+      "address": "tb1qrrgp0huy3wsahzjqp4xdm8lctp757ht08v5ulu"
+    },
+    {
+      "step": "Maker deposits BTC at the offer address",
+      "btc_txid": "d8f6bc72c00508ebb198cc9cb370ce536e5ff9fbe082704a49a7ed2121dafc3b",
+      "link": "https://mempool.space/signet/tx/d8f6bc72c00508ebb198cc9cb370ce536e5ff9fbe082704a49a7ed2121dafc3b"
+    },
+    {
+      "step": "Taker pays USDC (ft_transfer_call) into escrow; contract requests MPC signatures",
+      "near_tx": "https://testnet.nearblocks.io/txns/7F6yAG8ZcuH5xgs29Z8xjKcj2f4uKExVKVeCH48tu8tG",
+      "fee_sats": 142,
+      "inputs": 1
+    },
+    {
+      "step": "MPC signed, signature verified on chain, maker paid",
+      "status": "Settled",
+      "signed": "1/1",
+      "seconds": 0,
+      "btc_txid": "91a76214764d1a1fb6ccd3d742f7f9b81d2a4015747157b10ac3b213b1bd7676"
+    },
+    {
+      "step": "Release transaction broadcast to Bitcoin signet",
+      "btc_txid": "91a76214764d1a1fb6ccd3d742f7f9b81d2a4015747157b10ac3b213b1bd7676",
+      "to": "tb1qtfwzh58sy9n9mnl8j49y0d8t8fyu7947lykvgf",
+      "sats": 1358,
+      "link": "https://mempool.space/signet/tx/91a76214764d1a1fb6ccd3d742f7f9b81d2a4015747157b10ac3b213b1bd7676"
+    }
+  ],
+  "finished": "2026-11-10T16:13:53.097Z",
+  "config": {
+    "owner": "market.trueque.testnet",
+    "mpc_contract": "v1.signer-prod.testnet",
+    "network": "signet",
+    "fee_bps": 30,
+    "offer_bond": "20000000000000000000000",
+    "offers": 5,
+    "trades": 3,
+    "volume_sats": 5500,
+    "volume_near": "450000000000000000000000",
+    "tokens": [
+      "usdc.trueque.testnet"
+    ],
+    "token_volume": [
+      [
+        "usdc.trueque.testnet",
+        "1500000"
+      ]
+    ]
+  },
+  "maker_usdc_balance": "101495500"
+}

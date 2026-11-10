@@ -1,0 +1,21 @@
+[package]
+name = "trueque-test-usdc"
+version = "0.1.0"
+edition = "2021"
+description = "Test USDC (NEP-141) with a public faucet, for trying Trueque on testnet"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = "5.30"
+near-contract-standards = "5.30"
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true

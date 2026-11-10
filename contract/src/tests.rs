@@ -37,7 +37,7 @@ fn setup() -> Trueque {
 /// Opens offer 0 (10_000 sats for 1 NEAR) with the test key as derived key.
 fn open_offer(c: &mut Trueque) {
     ctx(accounts(1), OFFER_BOND);
-    let _ = c.create_offer(10_000, U128(NearToken::from_near(1).as_yoctonear()), MAKER_BTC.into());
+    let _ = c.create_offer(10_000, U128(NearToken::from_near(1).as_yoctonear()), MAKER_BTC.into(), None);
     ctx(me(), NearToken::from_yoctonear(0));
     c.on_derived_key(0, Ok(key_string(&key())));
 }
@@ -83,7 +83,7 @@ fn offer_gets_a_deposit_address() {
 fn failed_derivation_marks_offer_failed() {
     let mut c = setup();
     ctx(accounts(1), OFFER_BOND);
-    let _ = c.create_offer(10_000, U128(1), MAKER_BTC.into());
+    let _ = c.create_offer(10_000, U128(1), MAKER_BTC.into(), None);
     ctx(me(), NearToken::from_yoctonear(0));
     assert!(c.on_derived_key(0, Ok("garbage".into())).is_none());
     assert_eq!(c.get_offer(0).unwrap().status, Status::Failed);
@@ -263,8 +263,95 @@ fn list_filters_by_status() {
     let mut c = setup();
     open_offer(&mut c);
     ctx(accounts(1), OFFER_BOND);
-    let _ = c.create_offer(2_000, U128(5), MAKER_BTC.into());
+    let _ = c.create_offer(2_000, U128(5), MAKER_BTC.into(), None);
     assert_eq!(c.list_offers(None, None, None).len(), 2);
     assert_eq!(c.list_offers(Some(Status::Open), None, None).len(), 1);
     assert_eq!(c.list_offers(Some(Status::Deriving), None, None)[0].id, 1);
+}
+
+fn usdc() -> AccountId {
+    "usdc.trueque.testnet".parse().unwrap()
+}
+
+/// Opens offer 0 priced at 25 USDC (6 decimals).
+fn open_usdc_offer(c: &mut Trueque) {
+    ctx(accounts(0), NearToken::from_yoctonear(0));
+    c.add_token(usdc());
+    ctx(accounts(1), OFFER_BOND);
+    let _ = c.create_offer(10_000, U128(25_000_000), MAKER_BTC.into(), Some(usdc()));
+    ctx(me(), NearToken::from_yoctonear(0));
+    c.on_derived_key(0, Ok(key_string(&key())));
+}
+
+fn take_msg(fee: u64) -> String {
+    format!(r#"{{"id":0,"btc_address":"{TAKER_BTC}","utxos":[{{"txid":"{DEPOSIT_TXID}","vout":0,"value":10000}}],"fee_sats":{fee}}}"#)
+}
+
+#[test]
+fn usdc_offer_settles_through_ft_transfer_call() {
+    let mut c = setup();
+    open_usdc_offer(&mut c);
+    assert_eq!(c.get_offer(0).unwrap().token, Some(usdc()));
+    // The token contract calls ft_on_transfer; an overpayment of 1 USDC comes back as unused.
+    ctx(usdc(), NearToken::from_yoctonear(0));
+    let unused = c.ft_on_transfer(accounts(2), U128(26_000_000), take_msg(200));
+    match unused {
+        PromiseOrValue::Value(v) => assert_eq!(v.0, 1_000_000),
+        _ => panic!("expected a value"),
+    }
+    assert_eq!(c.get_offer(0).unwrap().status, Status::Taken);
+    assert_eq!(c.get_offer(0).unwrap().taker, Some(accounts(2)));
+    assert_eq!(sign_all(&mut c, &key(), 0), vec![true]);
+    let cfg = c.get_config();
+    assert_eq!(c.get_offer(0).unwrap().status, Status::Settled);
+    assert_eq!(cfg.token_volume, vec![(usdc(), U128(25_000_000))]);
+    assert_eq!(cfg.volume_near.0, 0);
+    // 0.3% protocol fee accrues to the owner in USDC.
+    assert_eq!(c.get_owed(accounts(0), usdc()).0, 75_000);
+}
+
+#[test]
+#[should_panic(expected = "This offer is not priced in this token")]
+fn other_token_is_rejected() {
+    let mut c = setup();
+    open_usdc_offer(&mut c);
+    ctx("fake-usdc.testnet".parse().unwrap(), NearToken::from_yoctonear(0));
+    let _ = c.ft_on_transfer(accounts(2), U128(25_000_000), take_msg(200));
+}
+
+#[test]
+#[should_panic(expected = "Send the full price")]
+fn usdc_underpayment_is_rejected() {
+    let mut c = setup();
+    open_usdc_offer(&mut c);
+    ctx(usdc(), NearToken::from_yoctonear(0));
+    let _ = c.ft_on_transfer(accounts(2), U128(24_999_999), take_msg(200));
+}
+
+#[test]
+#[should_panic(expected = "pay with ft_transfer_call")]
+fn usdc_offer_cannot_be_bought_with_near() {
+    let mut c = setup();
+    open_usdc_offer(&mut c);
+    ctx(accounts(2), NearToken::from_near(1));
+    c.take_offer(0, TAKER_BTC.into(), vec![utxo(10_000, 0)], 200);
+}
+
+#[test]
+#[should_panic(expected = "Token not accepted")]
+fn unlisted_token_cannot_price_offers() {
+    let mut c = setup();
+    ctx(accounts(1), OFFER_BOND);
+    let _ = c.create_offer(10_000, U128(1), MAKER_BTC.into(), Some(usdc()));
+}
+
+#[test]
+fn failed_token_payout_becomes_claimable() {
+    let mut c = setup();
+    ctx(me(), NearToken::from_yoctonear(0));
+    c.on_ft_payout(usdc(), accounts(1), U128(5_000_000), Err(PromiseError::Failed));
+    assert_eq!(c.get_owed(accounts(1), usdc()).0, 5_000_000);
+    ctx(accounts(1), NearToken::from_yoctonear(0));
+    let _ = c.withdraw_owed(usdc());
+    assert_eq!(c.get_owed(accounts(1), usdc()).0, 0);
 }

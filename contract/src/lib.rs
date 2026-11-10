@@ -24,9 +24,10 @@ mod btc;
 use btc::{Input, Output};
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::json;
-use near_sdk::store::IterableMap;
+use near_sdk::store::{IterableMap, IterableSet, LookupMap};
 use near_sdk::{
     env, log, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError,
+    PromiseOrValue,
 };
 
 const DOMAIN_ID: u32 = 0; // secp256k1 signing domain of the MPC contract
@@ -38,12 +39,18 @@ const OFFER_BOND: NearToken = NearToken::from_millinear(20);
 const GAS_DERIVE: Gas = Gas::from_tgas(10);
 const GAS_DERIVE_CB: Gas = Gas::from_tgas(10);
 const GAS_SIGN: Gas = Gas::from_tgas(15);
-const GAS_SIGN_CB: Gas = Gas::from_tgas(20);
+const GAS_SIGN_CB: Gas = Gas::from_tgas(35);
+const GAS_FT_TRANSFER: Gas = Gas::from_tgas(10);
+const GAS_FT_CB: Gas = Gas::from_tgas(5);
 
 #[derive(BorshStorageKey)]
 #[near]
 enum Key {
     Offers,
+    Tokens,
+    OfferToken,
+    Owed,
+    TokenVolume,
 }
 
 #[near(serializers = [borsh, json])]
@@ -180,6 +187,8 @@ pub struct OfferView {
     pub created_ms: u64,
     pub taker: Option<AccountId>,
     pub taker_address: Option<String>,
+    /// NEP-141 token the price is in; `None` means NEAR.
+    pub token: Option<AccountId>,
     pub settlements: Vec<SettlementView>,
 }
 
@@ -194,6 +203,17 @@ pub struct ConfigView {
     pub trades: u64,
     pub volume_sats: u64,
     pub volume_near: U128,
+    pub tokens: Vec<AccountId>,
+    pub token_volume: Vec<(AccountId, U128)>,
+}
+
+/// Arguments of a token purchase, sent as the `msg` of `ft_transfer_call`.
+#[near(serializers = [json])]
+pub struct TakeMsg {
+    pub id: u64,
+    pub btc_address: String,
+    pub utxos: Vec<Utxo>,
+    pub fee_sats: u64,
 }
 
 #[near(contract_state)]
@@ -203,6 +223,28 @@ pub struct Trueque {
     mpc: AccountId,
     network: String,
     /// Mixed into every derivation path so a redeploy never reuses addresses.
+    salt: String,
+    fee_bps: u16,
+    offers: IterableMap<u64, Offer>,
+    next_id: u64,
+    trades: u64,
+    volume_sats: u64,
+    volume_near: u128,
+    /// Stablecoins (NEP-141) offers can be priced in.
+    tokens: IterableSet<AccountId>,
+    offer_token: LookupMap<u64, AccountId>,
+    /// Token payouts that failed (for example an unregistered receiver), keyed
+    /// "account:token", claimable with `withdraw_owed`.
+    owed: LookupMap<String, u128>,
+    token_volume: IterableMap<AccountId, u128>,
+}
+
+/// State layout of the first deployment, before token prices.
+#[near(serializers = [borsh])]
+struct TruequeV1 {
+    owner: AccountId,
+    mpc: AccountId,
+    network: String,
     salt: String,
     fee_bps: u16,
     offers: IterableMap<u64, Offer>,
@@ -233,15 +275,44 @@ impl Trueque {
             trades: 0,
             volume_sats: 0,
             volume_near: 0,
+            tokens: IterableSet::new(Key::Tokens),
+            offer_token: LookupMap::new(Key::OfferToken),
+            owed: LookupMap::new(Key::Owed),
+            token_volume: IterableMap::new(Key::TokenVolume),
+        }
+    }
+
+    /// Upgrade from the first deployment (adds token prices). Offers and
+    /// history are kept as they are.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate() -> Self {
+        let old: TruequeV1 = env::state_read().expect("No state to migrate");
+        Self {
+            owner: old.owner,
+            mpc: old.mpc,
+            network: old.network,
+            salt: old.salt,
+            fee_bps: old.fee_bps,
+            offers: old.offers,
+            next_id: old.next_id,
+            trades: old.trades,
+            volume_sats: old.volume_sats,
+            volume_near: old.volume_near,
+            tokens: IterableSet::new(Key::Tokens),
+            offer_token: LookupMap::new(Key::OfferToken),
+            owed: LookupMap::new(Key::Owed),
+            token_volume: IterableMap::new(Key::TokenVolume),
         }
     }
 
     // ---------------------------------------------------------------- maker
 
-    /// Open an offer to sell `sats` for `price` yoctoNEAR. `refund_address` is
-    /// where the maker gets the BTC back (refund or change). Attach the bond.
+    /// Open an offer to sell `sats` for `price`, in yoctoNEAR or, with `token`,
+    /// in base units of that NEP-141 stablecoin. `refund_address` is where the
+    /// maker gets the BTC back (refund or change). Attach the bond.
     #[payable]
-    pub fn create_offer(&mut self, sats: u64, price: U128, refund_address: String) -> Promise {
+    pub fn create_offer(&mut self, sats: u64, price: U128, refund_address: String, token: Option<AccountId>) -> Promise {
         let bond = env::attached_deposit();
         require!(bond >= OFFER_BOND, "Attach the 0.02 NEAR offer bond");
         require!(sats >= MIN_SATS, "Offer at least 1000 sats");
@@ -251,6 +322,10 @@ impl Trueque {
 
         let id = self.next_id;
         self.next_id += 1;
+        if let Some(t) = token {
+            require!(self.tokens.contains(&t), "Token not accepted");
+            self.offer_token.insert(id, t);
+        }
         let path = format!("trueque/{}/{}", self.salt, id);
         self.offers.insert(
             id,
@@ -343,36 +418,48 @@ impl Trueque {
     /// out of the sats received.
     #[payable]
     pub fn take_offer(&mut self, id: u64, btc_address: String, utxos: Vec<Utxo>, fee_sats: u64) {
-        let network = self.network.clone();
+        require!(self.offer_token.get(&id).is_none(), "This offer is priced in a token: pay with ft_transfer_call");
         let taker = env::predecessor_account_id();
         let paid = env::attached_deposit().as_yoctonear();
-        let offer = self.offers.get_mut(&id).expect("No offer");
-        require!(offer.status == Status::Open, "Offer is not open");
-        require!(taker != offer.maker, "The maker cannot take their own offer");
-        require!(paid >= offer.price, "Attach the full price");
-        let taker_script = btc::address_to_script(&network, &btc_address).unwrap_or_else(|e| env::panic_str(e));
-
-        let inputs = parse_utxos(&utxos, &offer.settlements);
-        let total: u64 = inputs.iter().map(|i| i.value).sum();
-        require!(total >= offer.sats, "The deposit does not cover the offer yet");
-
-        let mut outputs = vec![Output { value: 0, script: taker_script }];
-        let change = total - offer.sats;
-        if change >= btc::DUST {
-            outputs.push(Output { value: change, script: offer.maker_script.clone() });
+        let price = self.offers.get(&id).expect("No offer").price;
+        require!(paid >= price, "Attach the full price");
+        if paid > price {
+            Promise::new(taker.clone()).transfer(NearToken::from_yoctonear(paid - price)).detach();
         }
-        check_fee(fee_sats, inputs.len(), &outputs, offer.sats);
-        outputs[0].value = offer.sats - fee_sats;
+        self.internal_take(id, taker, btc_address, utxos, fee_sats);
+    }
 
-        if paid > offer.price {
-            Promise::new(taker.clone()).transfer(NearToken::from_yoctonear(paid - offer.price)).detach();
+    /// NEP-141 receiver: buying a token priced offer. `msg` is a `TakeMsg`.
+    /// Any failure panics, so the token contract refunds the whole transfer;
+    /// an overpayment is returned as unused.
+    pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> PromiseOrValue<U128> {
+        let token = env::predecessor_account_id();
+        let take: TakeMsg = near_sdk::serde_json::from_str(&msg).unwrap_or_else(|_| env::panic_str("Invalid msg"));
+        require!(self.offer_token.get(&take.id) == Some(&token), "This offer is not priced in this token");
+        let price = self.offers.get(&take.id).expect("No offer").price;
+        require!(amount.0 >= price, "Send the full price");
+        self.internal_take(take.id, sender_id, take.btc_address, take.utxos, take.fee_sats);
+        PromiseOrValue::Value(U128(amount.0 - price))
+    }
+
+    /// Claim a token payout that could not be delivered (for example because
+    /// the receiver was not registered with the token yet).
+    pub fn withdraw_owed(&mut self, token: AccountId) -> Promise {
+        let who = env::predecessor_account_id();
+        let key = format!("{}:{}", who, token);
+        let amount = self.owed.remove(&key).unwrap_or(0);
+        require!(amount > 0, "Nothing owed");
+        self.ft_payout(token, who, amount)
+    }
+
+    #[private]
+    pub fn on_ft_payout(&mut self, token: AccountId, receiver: AccountId, amount: U128, #[callback_result] r: Result<(), PromiseError>) {
+        if r.is_err() {
+            let key = format!("{}:{}", receiver, token);
+            let prev = self.owed.get(&key).copied().unwrap_or(0);
+            self.owed.insert(key, prev + amount.0);
+            event("payout_owed", json!({"receiver": receiver, "token": token, "amount": amount}));
         }
-        offer.status = Status::Taken;
-        offer.taker = Some(taker.clone());
-        offer.taker_address = Some(btc_address.clone());
-        let s_idx = push_settlement(offer, Kind::Release, inputs, outputs);
-        event("offer_taken", json!({"id": id, "taker": taker, "btc_address": btc_address}));
-        self.sign_missing(id, s_idx);
     }
 
     // ---------------------------------------------------------------- signing
@@ -458,7 +545,13 @@ impl Trueque {
             trades: self.trades,
             volume_sats: self.volume_sats,
             volume_near: U128(self.volume_near),
+            tokens: self.tokens.iter().cloned().collect(),
+            token_volume: self.token_volume.iter().map(|(t, v)| (t.clone(), U128(*v))).collect(),
         }
+    }
+
+    pub fn get_owed(&self, account_id: AccountId, token: AccountId) -> U128 {
+        U128(self.owed.get(&format!("{}:{}", account_id, token)).copied().unwrap_or(0))
     }
 
     // ---------------------------------------------------------------- owner
@@ -468,9 +561,56 @@ impl Trueque {
         require!(fee_bps <= MAX_FEE_BPS, "Fee too high");
         self.fee_bps = fee_bps;
     }
+
+    /// Accept a NEP-141 stablecoin for prices. The contract must be registered
+    /// with the token (storage_deposit) to receive it.
+    pub fn add_token(&mut self, token: AccountId) {
+        require!(env::predecessor_account_id() == self.owner, "Owner only");
+        self.tokens.insert(token);
+    }
 }
 
 impl Trueque {
+    /// Shared by NEAR (`take_offer`) and token (`ft_on_transfer`) purchases,
+    /// once the price is paid: fixes the Bitcoin payout and asks MPC to sign it.
+    fn internal_take(&mut self, id: u64, taker: AccountId, btc_address: String, utxos: Vec<Utxo>, fee_sats: u64) {
+        let network = self.network.clone();
+        let offer = self.offers.get_mut(&id).expect("No offer");
+        require!(offer.status == Status::Open, "Offer is not open");
+        require!(taker != offer.maker, "The maker cannot take their own offer");
+        let taker_script = btc::address_to_script(&network, &btc_address).unwrap_or_else(|e| env::panic_str(e));
+
+        let inputs = parse_utxos(&utxos, &offer.settlements);
+        let total: u64 = inputs.iter().map(|i| i.value).sum();
+        require!(total >= offer.sats, "The deposit does not cover the offer yet");
+
+        let mut outputs = vec![Output { value: 0, script: taker_script }];
+        let change = total - offer.sats;
+        if change >= btc::DUST {
+            outputs.push(Output { value: change, script: offer.maker_script.clone() });
+        }
+        check_fee(fee_sats, inputs.len(), &outputs, offer.sats);
+        outputs[0].value = offer.sats - fee_sats;
+
+        offer.status = Status::Taken;
+        offer.taker = Some(taker.clone());
+        offer.taker_address = Some(btc_address.clone());
+        let s_idx = push_settlement(offer, Kind::Release, inputs, outputs);
+        event("offer_taken", json!({"id": id, "taker": taker, "btc_address": btc_address}));
+        self.sign_missing(id, s_idx);
+    }
+
+    fn ft_payout(&self, token: AccountId, receiver: AccountId, amount: u128) -> Promise {
+        Promise::new(token.clone())
+            .function_call(
+                "ft_transfer",
+                json!({"receiver_id": receiver, "amount": U128(amount), "memo": "Trueque payout"}).to_string().into_bytes(),
+                NearToken::from_yoctonear(1),
+                GAS_FT_TRANSFER,
+            )
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FT_CB).on_ft_payout(token, receiver, U128(amount)))
+    }
+
     fn push_refund(&mut self, id: u64, utxos: Vec<Utxo>, fee_sats: u64) {
         let offer = self.offers.get_mut(&id).unwrap();
         let inputs = parse_utxos(&utxos, &offer.settlements);
@@ -512,15 +652,30 @@ impl Trueque {
             Kind::Release if offer.status == Status::Taken => {
                 offer.status = Status::Settled;
                 let fee = offer.price * fee_bps / 10_000;
-                let to_maker = offer.price - fee + offer.bond;
-                Promise::new(offer.maker.clone()).transfer(NearToken::from_yoctonear(to_maker)).detach();
-                if fee > 0 {
-                    Promise::new(self.owner.clone()).transfer(NearToken::from_yoctonear(fee)).detach();
-                }
-                let (sats, price) = (offer.sats, offer.price);
+                let (maker, sats, price, bond) = (offer.maker.clone(), offer.sats, offer.price, offer.bond);
                 self.trades += 1;
                 self.volume_sats += sats;
-                self.volume_near += price;
+                match self.offer_token.get(&id).cloned() {
+                    None => {
+                        Promise::new(maker).transfer(NearToken::from_yoctonear(price - fee + bond)).detach();
+                        if fee > 0 {
+                            Promise::new(self.owner.clone()).transfer(NearToken::from_yoctonear(fee)).detach();
+                        }
+                        self.volume_near += price;
+                    }
+                    Some(token) => {
+                        Promise::new(maker.clone()).transfer(NearToken::from_yoctonear(bond)).detach();
+                        self.ft_payout(token.clone(), maker, price - fee).detach();
+                        // Protocol fees in tokens accrue to the owner, claimable with withdraw_owed.
+                        if fee > 0 {
+                            let key = format!("{}:{}", self.owner, token);
+                            let prev = self.owed.get(&key).copied().unwrap_or(0);
+                            self.owed.insert(key, prev + fee);
+                        }
+                        let prev = self.token_volume.get(&token).copied().unwrap_or(0);
+                        self.token_volume.insert(token, prev + price);
+                    }
+                }
                 event("offer_settled", json!({"id": id, "btc_txid": txid, "sats": sats, "price": U128(price)}));
             }
             _ => event("refund_signed", json!({"id": id, "btc_txid": txid})),
@@ -541,6 +696,7 @@ impl Trueque {
             created_ms: o.created_ms,
             taker: o.taker.clone(),
             taker_address: o.taker_address.clone(),
+            token: self.offer_token.get(&id).cloned(),
             settlements: o
                 .settlements
                 .iter()
