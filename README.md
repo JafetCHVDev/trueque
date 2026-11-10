@@ -83,6 +83,15 @@ node scripts/e2e.mjs 1500 1.1 --usdc     # priced in test USDC, bought with ft_t
 ```
 
 Each run writes its evidence (NEAR transactions, Bitcoin transactions, confirmations proven) to `docs/e2e-report-v2*.json`.
+Live results on 2026-11-10:
+
+| Paid in | Report | Seller deposit (BTC) | Buyer pays + proof (NEAR) | Payout signed by MPC (BTC) |
+| --- | --- | --- | --- | --- |
+| NEAR | [`e2e-report-v2.json`](docs/e2e-report-v2.json) | [196b6263...](https://mempool.space/testnet/tx/196b62633f713977bed04a357fe5b1675250563ee986b96ff268fd8f19d6c21b) | [498gp4Rz...](https://testnet.nearblocks.io/txns/498gp4RzYcJT79SNcuvWR8hG7282puqXrFM11sVY4qLf) | [15bafa8d...](https://mempool.space/testnet/tx/15bafa8dba8c3bdb6c4e3bc90f9d1b5684a0af4b4973cac956bf0ca9c58c9154) |
+| USDC | [`e2e-report-v2-usdc.json`](docs/e2e-report-v2-usdc.json) | [4a5fcac8...](https://mempool.space/testnet/tx/4a5fcac8538a557d6a3af382c9c977525c0f8c44f1bb7ba0eda4e2a5d9e71e3e) | [DchgMvnW...](https://testnet.nearblocks.io/txns/DchgMvnWnH1LtdPNHvkdHVg6WmJPF2UcNGwWZ6LF3XYB) | [96ed4910...](https://mempool.space/testnet/tx/96ed49102760f964e345e96f1c265b099565ac00d519792261cca0e8409aedc0) |
+
+In both, the light client proved the deposit, MPC signed in the same block and the contract checked the signature before
+the payout was broadcast.
 
 The first release ([`market.trueque.testnet`](https://testnet.nearblocks.io/address/market.trueque.testnet), tag
 [`v1-signet`](https://github.com/JafetCHVDev/trueque/tree/v1-signet)) ran the same escrow on Bitcoin signet, where no light

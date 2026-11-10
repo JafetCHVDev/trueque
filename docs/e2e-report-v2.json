@@ -1,0 +1,72 @@
+{
+  "contract": "trueque.testnet",
+  "light_client": "btc-client-v4.testnet",
+  "currency": "NEAR",
+  "network": "NEAR testnet + Bitcoin testnet3",
+  "started": "2026-11-10T20:44:31.179Z",
+  "steps": [
+    {
+      "step": "Maker opens an offer",
+      "id": 1,
+      "sats": 2000,
+      "price": "0.3 NEAR",
+      "deposit_address": "tb1q9tl4sdnaj4m0c9e8dsycfc2eh7gj3c0ry8awkf",
+      "near_tx": "https://testnet.nearblocks.io/txns/AULJFkoqH4r3t8iqUH22sZKcrPHQWJ2jdsjsNdiHSQnM"
+    },
+    {
+      "step": "Deposit address independently re-derived from the MPC contract",
+      "path": "trueque/69c3f255/1",
+      "address": "tb1q9tl4sdnaj4m0c9e8dsycfc2eh7gj3c0ry8awkf"
+    },
+    {
+      "step": "Maker deposits BTC at the offer address",
+      "btc_txid": "196b62633f713977bed04a357fe5b1675250563ee986b96ff268fd8f19d6c21b",
+      "link": "https://mempool.space/testnet/tx/196b62633f713977bed04a357fe5b1675250563ee986b96ff268fd8f19d6c21b"
+    },
+    {
+      "step": "Deposit confirmed and known to the light client",
+      "height": 5340866,
+      "confirmations": 12,
+      "light_client_tip": 5340876
+    },
+    {
+      "step": "Taker pays NEAR with the SPV proof; light client verifies; contract asks MPC to sign",
+      "near_tx": "https://testnet.nearblocks.io/txns/498gp4RzYcJT79SNcuvWR8hG7282puqXrFM11sVY4qLf",
+      "fee_sats": 142
+    },
+    {
+      "step": "Deposit proven on chain, MPC signed, signature verified, maker paid",
+      "status": "Settled",
+      "verified_confirmations": 1,
+      "signed": "1/1",
+      "seconds": 1
+    },
+    {
+      "step": "Release transaction broadcast to Bitcoin testnet",
+      "btc_txid": "15bafa8dba8c3bdb6c4e3bc90f9d1b5684a0af4b4973cac956bf0ca9c58c9154",
+      "known_to_bitcoin": true,
+      "to": "tb1qtfwzh58sy9n9mnl8j49y0d8t8fyu7947lykvgf",
+      "sats": 1858,
+      "link": "https://mempool.space/testnet/tx/15bafa8dba8c3bdb6c4e3bc90f9d1b5684a0af4b4973cac956bf0ca9c58c9154"
+    }
+  ],
+  "finished": "2026-11-10T20:46:16.990Z",
+  "config": {
+    "owner": "trueque.testnet",
+    "mpc_contract": "v1.signer-prod.testnet",
+    "network": "testnet",
+    "light_client": "btc-client-v4.testnet",
+    "min_confirmations": 1,
+    "fee_bps": 30,
+    "offer_bond": "20000000000000000000000",
+    "reclaim_after_ms": 3600000,
+    "offers": 2,
+    "trades": 1,
+    "volume_sats": 2000,
+    "volume_near": "300000000000000000000000",
+    "tokens": [
+      "usdc.trueque.testnet"
+    ],
+    "token_volume": []
+  }
+}
