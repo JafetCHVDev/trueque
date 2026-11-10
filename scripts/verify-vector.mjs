@@ -11,7 +11,7 @@ import * as ecc from "tiny-secp256k1";
 
 const out = execFileSync(
   "cargo",
-  ["test", "--quiet", "full_trade_settles_and_produces_a_signed_tx", "--", "--nocapture"],
+  ["test", "--quiet", "verified_trade_settles_and_produces_a_signed_tx", "--", "--nocapture"],
   {
     cwd: fileURLToPath(new URL("../contract/", import.meta.url)),
     encoding: "utf8",

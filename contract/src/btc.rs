@@ -214,6 +214,88 @@ pub fn script_to_address(network: &str, script: &[u8]) -> Option<String> {
     bech32::segwit::encode(hrp, fe, &script[2..]).ok()
 }
 
+/// A transaction parsed from raw bytes: its txid (internal order, computed
+/// from the witness stripped serialization) and its outputs.
+pub struct ParsedTx {
+    pub txid: [u8; 32],
+    pub outputs: Vec<Output>,
+}
+
+struct Reader<'a> {
+    b: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], &'static str> {
+        let end = self.pos.checked_add(n).ok_or("Truncated transaction")?;
+        let s = self.b.get(self.pos..end).ok_or("Truncated transaction")?;
+        self.pos = end;
+        Ok(s)
+    }
+    fn varint(&mut self) -> Result<usize, &'static str> {
+        let first = self.take(1)?[0];
+        Ok(match first {
+            0xfd => u16::from_le_bytes(self.take(2)?.try_into().unwrap()) as usize,
+            0xfe => u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize,
+            0xff => return Err("Oversized varint"),
+            n => n as usize,
+        })
+    }
+}
+
+/// Parse a raw Bitcoin transaction (legacy or segwit). The txid is computed
+/// here, so callers cannot lie about which transaction they mean.
+pub fn parse_tx(raw: &[u8]) -> Result<ParsedTx, &'static str> {
+    let mut r = Reader { b: raw, pos: 0 };
+    let mut stripped = Vec::with_capacity(raw.len());
+    stripped.extend_from_slice(r.take(4)?); // version
+    let segwit = raw.len() > 6 && raw[4] == 0x00 && raw[5] == 0x01;
+    if segwit {
+        r.take(2)?;
+    }
+    let body_start = r.pos;
+    let n_in = r.varint()?;
+    if n_in == 0 || n_in > 1000 {
+        return Err("Bad input count");
+    }
+    for _ in 0..n_in {
+        r.take(36)?;
+        let len = r.varint()?;
+        r.take(len)?;
+        r.take(4)?;
+    }
+    let n_out = r.varint()?;
+    if n_out == 0 || n_out > 1000 {
+        return Err("Bad output count");
+    }
+    let mut outputs = Vec::with_capacity(n_out);
+    for _ in 0..n_out {
+        let value = u64::from_le_bytes(r.take(8)?.try_into().unwrap());
+        let len = r.varint()?;
+        outputs.push(Output { value, script: r.take(len)?.to_vec() });
+    }
+    stripped.extend_from_slice(&raw[body_start..r.pos]);
+    if segwit {
+        for _ in 0..n_in {
+            let items = r.varint()?;
+            for _ in 0..items {
+                let len = r.varint()?;
+                r.take(len)?;
+            }
+        }
+    }
+    stripped.extend_from_slice(r.take(4)?); // locktime
+    if r.pos != raw.len() {
+        return Err("Trailing bytes in transaction");
+    }
+    // A 64 byte "transaction" could pose as an inner Merkle node.
+    if stripped.len() == 64 {
+        return Err("Invalid transaction size");
+    }
+    Ok(ParsedTx { txid: dsha256(&stripped), outputs })
+}
+
 /// Parse a display order txid into internal byte order.
 pub fn parse_txid(display_hex: &str) -> Result<[u8; 32], &'static str> {
     let bytes = hex::decode(display_hex).map_err(|_| "txid must be hex")?;
@@ -252,6 +334,23 @@ mod tests {
         assert_eq!(script.len(), 22);
         assert_eq!(script_to_address("signet", &script).unwrap(), addr);
         assert!(address_to_script("mainnet", addr).is_err());
+    }
+
+    #[test]
+    fn parses_segwit_transactions_and_recomputes_the_txid() {
+        let inputs = vec![Input { txid: [7u8; 32], vout: 1, value: 5000 }];
+        let outputs = vec![
+            Output { value: 4000, script: address_to_script("signet", "tb1qxs8qnv50kswwe76nlmvq4rshpq6uxuyqkh9nqz").unwrap() },
+            Output { value: 800, script: address_to_script("signet", "tb1qtfwzh58sy9n9mnl8j49y0d8t8fyu7947lykvgf").unwrap() },
+        ];
+        let signed = signed_tx(&inputs, &outputs, &[vec![0x30, 0x01, 0x01]], &[2u8; 33]);
+        let p = parse_tx(&signed).unwrap();
+        assert_eq!(display_txid(&p.txid), txid_hex(&inputs, &outputs));
+        assert_eq!(p.outputs, outputs);
+        assert!(parse_tx(&signed[..signed.len() - 1]).is_err());
+        let mut extra = signed.clone();
+        extra.push(0);
+        assert!(parse_tx(&extra).is_err());
     }
 
     #[test]
