@@ -3,7 +3,7 @@ import { balanceOf, fmtSats, loadBtcWallet, satsToBtc, short } from "./btc";
 import { BuyDialog } from "./BuyDialog";
 import { BTC_EXPLORER, CONTRACT, MPC_CONTRACT, NEAR_EXPLORER, REPO_URL } from "./config";
 import { fundedTotal, refFor, useMarket, useReferenceRate, type MarketOffer, type Reference } from "./market";
-import { connectWallet, createGuest, formatNear, formatUsdc, priceLabel, priceValue, restoreSession, type Session } from "./near";
+import { connectWallet, createGuest, formatNear, formatUsdc, priceLabel, priceValue, restoreSession, usdcBalance, type Session } from "./near";
 import { OfferPage } from "./OfferPage";
 import { SellForm } from "./SellForm";
 import { Copy, ErrorNote, Ext, Modal, Pill, Spinner, timeAgo } from "./ui";
@@ -82,9 +82,13 @@ function Logo() {
 
 function Header({ session, onSignin, onSignOut }: { session: Session | null; onSignin: () => void; onSignOut: () => void }) {
   const [bal, setBal] = useState<string | null>(null);
+  const [usdc, setUsdc] = useState<string | null>(null);
   useEffect(() => {
     if (!session) return setBal(null);
-    const f = () => session.balance().then((b) => setBal(formatNear(b, 2)), () => {});
+    const f = () => {
+      session.balance().then((b) => setBal(formatNear(b, 2)), () => {});
+      usdcBalance(session.accountId).then((u) => setUsdc(u > 0n ? formatUsdc(u) : null), () => {});
+    };
     f();
     const t = setInterval(f, 10_000);
     return () => clearInterval(t);
@@ -106,7 +110,11 @@ function Header({ session, onSignin, onSignOut }: { session: Session | null; onS
         {session ? (
           <div className="account">
             <span className="mono small">{short(session.accountId, 10)}</span>
-            {bal && <span className="small muted">{bal} NEAR</span>}
+            {bal && (
+              <span className="small muted">
+                {bal} NEAR{usdc && ` · ${usdc} USDC`}
+              </span>
+            )}
             <button className="link-btn small" onClick={onSignOut}>
               Sign out
             </button>
@@ -425,7 +433,7 @@ function HowItWorks() {
           <span className="num">2</span>
           <h3>The contract writes the Bitcoin transaction</h3>
           <p>
-            When a buyer pays the NEAR price, the contract builds the payout transaction on chain: the deposit as inputs, the
+            When a buyer pays the price (USDC or NEAR), the contract builds the payout transaction on chain: the deposit as inputs, the
             buyer's address (and change back to the seller) as outputs. It computes each BIP143 sighash itself and asks MPC to sign
             them. The buyer cannot redirect the coins, and the seller cannot take them back.
           </p>
@@ -464,57 +472,65 @@ function HowItWorks() {
 
 function Diagram() {
   return (
-    <svg
-      className="diagram"
-      viewBox="0 0 900 230"
-      role="img"
-      aria-label="Seller deposits BTC to an MPC controlled address, buyer pays NEAR to the contract, the contract asks MPC to sign the BTC payout to the buyer and pays the seller"
-    >
-      <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0 0L10 5L0 10z" fill="currentColor" />
-        </marker>
-      </defs>
-      <g className="d-box">
-        <rect x="10" y="20" width="170" height="70" rx="12" />
-        <text x="95" y="50">Seller</text>
-        <text x="95" y="72" className="d-sub">has BTC, wants NEAR</text>
-      </g>
-      <g className="d-box">
-        <rect x="10" y="140" width="170" height="70" rx="12" />
-        <text x="95" y="170">Buyer</text>
-        <text x="95" y="192" className="d-sub">has NEAR, wants BTC</text>
-      </g>
-      <g className="d-box btc-box">
-        <rect x="300" y="20" width="250" height="70" rx="12" />
-        <text x="425" y="50">Escrow BTC address</text>
-        <text x="425" y="72" className="d-sub">key held by NEAR MPC</text>
-      </g>
-      <g className="d-box near-box">
-        <rect x="300" y="140" width="250" height="70" rx="12" />
-        <text x="425" y="170">Trueque contract</text>
-        <text x="425" y="192" className="d-sub">builds + verifies the BTC tx</text>
-      </g>
-      <g className="d-box mpc-box">
-        <rect x="680" y="80" width="210" height="70" rx="12" />
-        <text x="785" y="110">NEAR MPC network</text>
-        <text x="785" y="132" className="d-sub">threshold ECDSA</text>
-      </g>
-      <g className="d-arrows">
-        <path d="M180 55H296" markerEnd="url(#arrow)" className="btc-line" />
-        <text x="238" y="45">1 BTC</text>
-        <path d="M180 175H296" markerEnd="url(#arrow)" className="near-line" />
-        <text x="238" y="165">2 NEAR</text>
-        <path d="M550 165C610 165 630 130 676 120" markerEnd="url(#arrow)" />
-        <text x="618" y="178">3 sign</text>
-        <path d="M680 100C630 80 600 60 554 58" markerEnd="url(#arrow)" className="btc-line" />
-        <text x="618" y="66">4 signature</text>
-        <path d="M425 90C425 125 260 125 184 160" markerEnd="url(#arrow)" className="btc-line" strokeDasharray="5 5" />
-        <text x="318" y="132">5 BTC to buyer</text>
-        <path d="M300 150C255 125 220 105 184 82" markerEnd="url(#arrow)" className="near-line" strokeDasharray="5 5" />
-        <text x="206" y="112">NEAR to seller</text>
-      </g>
-    </svg>
+    <figure className="diagram-wrap">
+      <svg
+        className="diagram"
+        viewBox="0 0 900 230"
+        role="img"
+        aria-label="The seller locks BTC at an escrow address controlled by the Trueque contract through NEAR MPC. The buyer pays the contract. The contract asks MPC to sign the payout, which unlocks the escrow to the buyer."
+      >
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0L10 5L0 10z" fill="context-stroke" />
+          </marker>
+        </defs>
+        <g className="d-box">
+          <rect x="10" y="20" width="170" height="70" rx="12" />
+          <text x="95" y="50">Seller</text>
+          <text x="95" y="72" className="d-sub">has BTC</text>
+        </g>
+        <g className="d-box">
+          <rect x="10" y="140" width="170" height="70" rx="12" />
+          <text x="95" y="170">Buyer</text>
+          <text x="95" y="192" className="d-sub">has USDC or NEAR</text>
+        </g>
+        <g className="d-box btc-box">
+          <rect x="300" y="20" width="250" height="70" rx="12" />
+          <text x="425" y="50">Escrow BTC address</text>
+          <text x="425" y="72" className="d-sub">one per offer, key held by NEAR MPC</text>
+        </g>
+        <g className="d-box near-box">
+          <rect x="300" y="140" width="250" height="70" rx="12" />
+          <text x="425" y="170">Trueque contract</text>
+          <text x="425" y="192" className="d-sub">writes + verifies the BTC payout</text>
+        </g>
+        <g className="d-box mpc-box">
+          <rect x="680" y="80" width="210" height="70" rx="12" />
+          <text x="785" y="110">NEAR MPC network</text>
+          <text x="785" y="132" className="d-sub">threshold ECDSA</text>
+        </g>
+        <g className="d-arrows">
+          <path d="M180 55H296" markerEnd="url(#arrow)" className="btc-line" />
+          <text x="238" y="45">1 lock</text>
+          <path d="M180 175H296" markerEnd="url(#arrow)" className="near-line" />
+          <text x="238" y="165">2 pay</text>
+          <path d="M425 136V94" markerEnd="url(#arrow)" strokeDasharray="5 5" />
+          <text x="470" y="119">controls</text>
+          <path d="M550 168C615 168 640 150 676 136" markerEnd="url(#arrow)" />
+          <text x="622" y="186">3 sign payout</text>
+          <path d="M680 96C640 80 610 58 554 56" markerEnd="url(#arrow)" className="btc-line" />
+          <text x="622" y="60">4 signature</text>
+        </g>
+      </svg>
+      <figcaption className="outcomes">
+        <span>
+          <strong className="btc">5</strong> The signed transaction pays the buyer native BTC on Bitcoin.
+        </span>
+        <span>
+          <strong className="near">6</strong> In the same step, the contract pays the seller.
+        </span>
+      </figcaption>
+    </figure>
   );
 }
 

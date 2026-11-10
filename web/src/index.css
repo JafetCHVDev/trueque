@@ -609,7 +609,7 @@ main {
 }
 .d-arrows path {
   fill: none;
-  stroke: currentColor;
+  stroke: var(--muted);
   stroke-width: 2;
 }
 .d-arrows .btc-line {
@@ -626,7 +626,27 @@ main {
   text-anchor: middle;
 }
 .diagram-wrap {
-  overflow-x: auto;
+  margin: 0 0 24px;
+}
+.diagram-wrap .diagram {
+  margin-bottom: 8px;
+}
+.outcomes {
+  display: flex;
+  gap: 12px 28px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 14px;
+}
+.outcomes strong {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  margin-right: 6px;
+  font-size: 12px;
 }
 .steps3 {
   display: grid;
