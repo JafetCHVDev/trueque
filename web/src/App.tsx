@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { balanceOf, fmtSats, loadBtcWallet, satsToBtc, short } from "./btc";
 import { BuyDialog } from "./BuyDialog";
 import { BTC_EXPLORER, CONTRACT, MPC_CONTRACT, NEAR_EXPLORER, REPO_URL } from "./config";
-import { fundedTotal, useMarket, useReferenceRate, type MarketOffer } from "./market";
-import { connectWallet, createGuest, formatNear, restoreSession, type Session } from "./near";
+import { fundedTotal, refFor, useMarket, useReferenceRate, type MarketOffer, type Reference } from "./market";
+import { connectWallet, createGuest, formatNear, formatUsdc, priceLabel, priceValue, restoreSession, type Session } from "./near";
 import { OfferPage } from "./OfferPage";
 import { SellForm } from "./SellForm";
 import { Copy, ErrorNote, Ext, Modal, Pill, Spinner, timeAgo } from "./ui";
@@ -157,7 +157,8 @@ function Home({ session, market, onSignin }: { session: Session | null; market: 
   const ref = useReferenceRate();
   const [buying, setBuying] = useState<MarketOffer | null>(null);
   const open = (offers ?? []).filter((o) => o.status === "Open");
-  const funded = open.filter((o) => fundedTotal(o.funding) >= o.sats).sort((a, b) => rate(a) - rate(b));
+  const funded = open.filter((o) => fundedTotal(o.funding) >= o.sats).sort((a, b) => (premium(a, ref) ?? 0) - (premium(b, ref) ?? 0));
+  const usdcVolume = config?.token_volume?.reduce((s, [, v]) => s + BigInt(v), 0n) ?? 0n;
   const waiting = open.filter((o) => fundedTotal(o.funding) < o.sats);
   const settled = (offers ?? []).filter((o) => o.status === "Settled").slice(0, 6);
 
@@ -167,13 +168,13 @@ function Home({ session, market, onSignin }: { session: Session | null; market: 
         <div className="hero-copy">
           <p className="eyebrow">Peer to peer · native Bitcoin · NEAR Chain Signatures</p>
           <h1>
-            Trade real Bitcoin for NEAR.
+            Trade real Bitcoin for USDC or NEAR.
             <br />
             <span className="grad">No bridge. No wrapped BTC. No custodian.</span>
           </h1>
           <p className="lead">
             Every offer's BTC sits at its own Bitcoin address that only a NEAR smart contract can spend from, through the NEAR MPC
-            network. Buyers pay in NEAR, and the contract signs the Bitcoin payout itself. Neither side has to trust the other.
+            network. Buyers pay in USDC or NEAR, and the contract signs the Bitcoin payout itself. Neither side has to trust the other.
           </p>
           <div className="hero-cta">
             <a className="btn primary" href="#market">
@@ -187,8 +188,8 @@ function Home({ session, market, onSignin }: { session: Session | null; market: 
         <div className="stats">
           <Stat label="Trades settled" value={config ? String(config.trades) : "…"} />
           <Stat label="BTC volume" value={config ? `${fmtSats(config.volume_sats)} sats` : "…"} />
-          <Stat label="NEAR volume" value={config ? formatNear(config.volume_near, 2) : "…"} />
-          <Stat label="Offers opened" value={config ? String(config.offers) : "…"} />
+          <Stat label="Paid in NEAR" value={config ? `${formatNear(config.volume_near, 2)} NEAR` : "…"} />
+          <Stat label="Paid in USDC" value={config ? `${formatUsdc(usdcVolume)} USDC` : "…"} />
         </div>
       </section>
 
@@ -198,7 +199,12 @@ function Home({ session, market, onSignin }: { session: Session | null; market: 
             <p className="eyebrow">Market</p>
             <h2>Bitcoin for sale</h2>
           </div>
-          {ref && <span className="muted small">Reference: 1 BTC ≈ {ref.toLocaleString("en-US", { maximumFractionDigits: 0 })} NEAR</span>}
+          {ref && (
+            <span className="muted small">
+              Reference: 1 BTC ≈ ${ref.usdPerBtc.toLocaleString("en-US", { maximumFractionDigits: 0 })} ≈{" "}
+              {ref.nearPerBtc.toLocaleString("en-US", { maximumFractionDigits: 0 })} NEAR
+            </span>
+          )}
         </div>
         <ErrorNote error={error} />
         {!offers ? (
@@ -242,7 +248,7 @@ function Home({ session, market, onSignin }: { session: Session | null; market: 
                 <li key={o.id}>
                   <a href={`#/offer/${o.id}`}>#{o.id}</a>
                   <span className="btc">{fmtSats(o.sats)} sats</span>
-                  <span className="near">{formatNear(o.price)} NEAR</span>
+                  <span className={o.token ? "usdc" : "near"}>{priceLabel(o)}</span>
                   <span className="mono small muted">{short(o.taker ?? "", 10)}</span>
                   {r && <Ext href={`${BTC_EXPLORER}/tx/${r.txid}`}>{short(r.txid, 6)}</Ext>}
                 </li>
@@ -260,12 +266,18 @@ function Home({ session, market, onSignin }: { session: Session | null; market: 
   );
 }
 
-/** NEAR per BTC implied by an offer. */
-const rate = (o: MarketOffer) => Number(BigInt(o.price) / 10n ** 18n) / 1e6 / (o.sats / 1e8);
+/** Price per BTC implied by an offer, in its own currency. */
+const rate = (o: MarketOffer) => priceValue(o) / (o.sats / 1e8);
 
-function OfferCard({ o, ref_, me, onBuy }: { o: MarketOffer; ref_: number | null; me?: string; onBuy?: () => void }) {
+/** Percent above (+) or below (-) the reference price. */
+function premium(o: MarketOffer, ref: Reference | null): number | null {
+  const r = refFor(ref, o.token);
+  return r ? (rate(o) / r - 1) * 100 : null;
+}
+
+function OfferCard({ o, ref_, me, onBuy }: { o: MarketOffer; ref_: Reference | null; me?: string; onBuy?: () => void }) {
   const r = rate(o);
-  const prem = ref_ ? (r / ref_ - 1) * 100 : null;
+  const prem = premium(o, ref_);
   const f = o.funding;
   return (
     <article className="offer card">
@@ -274,9 +286,9 @@ function OfferCard({ o, ref_, me, onBuy }: { o: MarketOffer; ref_: number | null
         <span className="muted small">{satsToBtc(o.sats)} sBTC</span>
       </a>
       <div className="offer-price">
-        <span className="near big">{formatNear(o.price)} NEAR</span>
+        <span className={`big ${o.token ? "usdc" : "near"}`}>{priceLabel(o)}</span>
         <span className="muted small">
-          {r.toLocaleString("en-US", { maximumFractionDigits: 0 })} NEAR/BTC
+          {r.toLocaleString("en-US", { maximumFractionDigits: 0 })} {o.token ? "USDC" : "NEAR"}/BTC
           {prem !== null && (
             <span className={prem > 0 ? "warn-text" : "ok-text"}>
               {" "}
@@ -381,7 +393,7 @@ function Activity({ session, offers, onSignin }: { session: Session | null; offe
                   <td>#{o.id}</td>
                   <td>{o.maker === session.accountId ? "Seller" : "Buyer"}</td>
                   <td className="btc">{fmtSats(o.sats)} sats</td>
-                  <td className="near">{formatNear(o.price)} NEAR</td>
+                  <td className={o.token ? "usdc" : "near"}>{priceLabel(o)}</td>
                   <td>{o.status}</td>
                 </tr>
               ))}

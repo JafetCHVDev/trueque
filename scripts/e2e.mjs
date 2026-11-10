@@ -107,4 +107,4 @@ report.finished = new Date().toISOString();
 report.config = await view("get_config");
 if (USDC) report.maker_usdc_balance = await view("ft_balance_of", { account_id: MAKER }, USDC_TOKEN);
 writeFileSync(new URL(`../docs/e2e-report${USDC ? "-usdc" : ""}.json`, import.meta.url), JSON.stringify(report, null, 2));
-console.log("\nOK: trade settled end to end. Report in docs/e2e-report.json");
+console.log(`\nOK: trade settled end to end. Report in docs/e2e-report${USDC ? "-usdc" : ""}.json`);

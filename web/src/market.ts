@@ -60,18 +60,26 @@ export function useMarket(intervalMs = 15_000) {
   return { offers, config, error, refresh };
 }
 
-/** Reference BTC price in NEAR from a public market feed, for context only. */
-export function useReferenceRate() {
-  const [nearPerBtc, setRate] = useState<number | null>(null);
+export interface Reference {
+  nearPerBtc: number;
+  usdPerBtc: number;
+}
+
+/** Reference BTC price from a public market feed, for context only. */
+export function useReferenceRate(): Reference | null {
+  const [ref, setRef] = useState<Reference | null>(null);
   useEffect(() => {
     fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,near&vs_currencies=usd")
       .then((r) => r.json())
       .then((j) => {
         const btc = j?.bitcoin?.usd;
         const near = j?.near?.usd;
-        if (btc && near) setRate(btc / near);
+        if (btc && near) setRef({ nearPerBtc: btc / near, usdPerBtc: btc });
       })
       .catch(() => {});
   }, []);
-  return nearPerBtc;
+  return ref;
 }
+
+/** Reference BTC price in the offer's own currency (USDC tracks USD). */
+export const refFor = (ref: Reference | null, token: string | null) => (ref ? (token ? ref.usdPerBtc : ref.nearPerBtc) : null);

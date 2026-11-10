@@ -3,7 +3,7 @@ import { balanceOf, broadcast, feeFor, feeRate, fmtSats, loadBtcWallet, satsToBt
 import { BuyDialog } from "./BuyDialog";
 import { BTC_EXPLORER, CONTRACT, MPC_CONTRACT, NEAR_EXPLORER } from "./config";
 import { fundedTotal, fundingOf, type Funding } from "./market";
-import { formatNear, getOffer, type Offer, type Session, type SettlementView } from "./near";
+import { getOffer, priceLabel, priceValue, type Offer, type Session, type SettlementView } from "./near";
 import { Copy, ErrorNote, Ext, Pill, Qr, Spinner, timeAgo } from "./ui";
 
 type TxState = { found: boolean; confirmed: boolean; block_height?: number };
@@ -85,10 +85,10 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
           <p className="eyebrow">Offer #{offer.id}</p>
           <h1>
             <span className="btc">{fmtSats(offer.sats)} sats</span> <span className="muted">for</span>{" "}
-            <span className="near">{formatNear(offer.price)} NEAR</span>
+            <span className={offer.token ? "usdc" : "near"}>{priceLabel(offer)}</span>
           </h1>
           <p className="muted">
-            {satsToBtc(offer.sats)} sBTC · {(Number(formatNear(offer.price, 8)) / (offer.sats / 1e8)).toLocaleString("en-US", { maximumFractionDigits: 0 })} NEAR per BTC · by{" "}
+            {satsToBtc(offer.sats)} sBTC · {(priceValue(offer) / (offer.sats / 1e8)).toLocaleString("en-US", { maximumFractionDigits: 0 })} {offer.token ? "USDC" : "NEAR"} per BTC · by{" "}
             <span className="mono">{offer.maker}</span> · {timeAgo(offer.created_ms)}
           </p>
         </div>
@@ -141,14 +141,14 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
             )}
           </Step>
 
-          <Step done={!!offer.taker} active={offer.status === "Open" && funded >= offer.sats} title="Buyer pays NEAR into the contract">
+          <Step done={!!offer.taker} active={offer.status === "Open" && funded >= offer.sats} title={`Buyer pays ${offer.token ? "USDC" : "NEAR"} into the contract`}>
             {offer.taker ? (
               <p>
-                <span className="mono">{offer.taker}</span> paid {formatNear(offer.price)} NEAR. Payout to{" "}
+                <span className="mono">{offer.taker}</span> paid {priceLabel(offer)}. Payout to{" "}
                 <span className="mono">{short(offer.taker_address ?? "", 10)}</span>.
               </p>
             ) : offer.status === "Open" ? (
-              <p>Open for any buyer. The NEAR stays in the contract until the BTC payout is signed.</p>
+              <p>Open for any buyer. The payment stays in the contract until the BTC payout is signed.</p>
             ) : (
               <p className="muted">Offer closed without a buyer.</p>
             )}
@@ -177,13 +177,13 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
           {offer.status === "Open" && !isMaker && (
             <>
               <h3>Buy this offer</h3>
-              <p className="muted small">Pay in NEAR, receive native BTC on signet. No bridge, no wrapped token.</p>
+              <p className="muted small">Pay in {offer.token ? "USDC" : "NEAR"}, receive native BTC on signet. No bridge, no wrapped token.</p>
               <button
                 className="btn primary wide"
                 disabled={funded < offer.sats}
                 onClick={() => (session ? setBuying(true) : onConnect())}
               >
-                {funded < offer.sats ? "Waiting for the deposit" : session ? `Buy for ${formatNear(offer.price)} NEAR` : "Sign in to buy"}
+                {funded < offer.sats ? "Waiting for the deposit" : session ? `Buy for ${priceLabel(offer)}` : "Sign in to buy"}
               </button>
             </>
           )}
@@ -211,7 +211,7 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
           {offer.status === "Settled" && (
             <>
               <h3>Settled</h3>
-              <p className="muted small">The seller was paid in NEAR the moment the BTC payout signature was verified on chain.</p>
+              <p className="muted small">The seller was paid the moment the BTC payout signature was verified on chain.</p>
             </>
           )}
           <ErrorNote error={error} />

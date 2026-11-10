@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { feeFor, feeRate, fmtSats, isSignetAddress, loadBtcWallet, satsToBtc } from "./btc";
-import { GAS_TAKE } from "./config";
+import { CONTRACT, GAS_TAKE, USDC_TOKEN } from "./config";
 import { fundedTotal, type MarketOffer } from "./market";
-import { formatNear, type Session } from "./near";
+import { formatUsdc, priceLabel, usdcBalance, type Session } from "./near";
 import { ErrorNote, Modal, Pill, Spinner } from "./ui";
 
 export function BuyDialog({
@@ -22,9 +22,15 @@ export function BuyDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [usdc, setUsdc] = useState<bigint | null>(null);
+  const isToken = !!offer.token;
+
+  const loadUsdc = () => usdcBalance(session.accountId).then(setUsdc, () => setUsdc(0n));
   useEffect(() => {
     feeRate().then(setRate);
+    if (isToken) loadUsdc();
   }, []);
+  const short_ = isToken && usdc !== null && usdc < BigInt(offer.price);
 
   const f = offer.funding;
   const confirmedUtxos = (f?.utxos ?? []).filter((u) => u.status.confirmed);
@@ -45,17 +51,24 @@ export function BuyDialog({
     setBusy(true);
     setError(null);
     try {
-      await session.call(
-        "take_offer",
-        {
-          id: offer.id,
-          btc_address: address.trim(),
-          utxos: useUtxos.map(({ txid, vout, value }) => ({ txid, vout, value })),
-          fee_sats: fee,
-        },
-        BigInt(offer.price),
-        GAS_TAKE,
-      );
+      const take = {
+        id: offer.id,
+        btc_address: address.trim(),
+        utxos: useUtxos.map(({ txid, vout, value }) => ({ txid, vout, value })),
+        fee_sats: fee,
+      };
+      if (isToken) {
+        // Stablecoin: the token transfers the price to Trueque and calls ft_on_transfer.
+        await session.call(
+          "ft_transfer_call",
+          { receiver_id: CONTRACT, amount: offer.price, msg: JSON.stringify(take) },
+          1n,
+          GAS_TAKE,
+          offer.token!,
+        );
+      } else {
+        await session.call("take_offer", take, BigInt(offer.price), GAS_TAKE);
+      }
       onTaken(offer.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -68,7 +81,7 @@ export function BuyDialog({
       <div className="buy-summary">
         <div>
           <span className="label">You pay</span>
-          <strong className="big near">{formatNear(offer.price)} NEAR</strong>
+          <strong className={`big ${isToken ? "usdc" : "near"}`}>{priceLabel(offer)}</strong>
         </div>
         <span className="arrow" aria-hidden>
           →
@@ -117,9 +130,33 @@ export function BuyDialog({
             <dd>{fmtSats(change)} sats</dd>
           </div>
         )}
+        {isToken && (
+          <div>
+            <dt>Your test USDC</dt>
+            <dd>
+              {usdc === null ? "…" : `${formatUsdc(usdc)} USDC`}{" "}
+              {short_ && (
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={async () => {
+                    try {
+                      await session.call("faucet", {}, 0n, 30_000_000_000_000n, USDC_TOKEN);
+                      await loadUsdc();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : String(e));
+                    }
+                  }}
+                >
+                  Get 100 test USDC
+                </button>
+              )}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Settlement</dt>
-          <dd>Atomic: your NEAR only reaches the seller once NEAR MPC has signed your BTC payout.</dd>
+          <dd>Atomic: your {isToken ? "USDC" : "NEAR"} only reaches the seller once NEAR MPC has signed your BTC payout.</dd>
         </div>
       </dl>
 
@@ -138,13 +175,13 @@ export function BuyDialog({
         <button className="btn ghost" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn primary" disabled={!addrOk || !covered || busy || receive < 546} onClick={buy}>
+        <button className="btn primary" disabled={!addrOk || !covered || busy || receive < 546 || short_} onClick={buy}>
           {busy ? (
             <>
               <Spinner /> Confirming…
             </>
           ) : (
-            `Pay ${formatNear(offer.price)} NEAR`
+            `Pay ${priceLabel(offer)}`
           )}
         </button>
       </div>

@@ -4,7 +4,7 @@
 
 import { NearConnector } from "@hot-labs/near-connect";
 import { Account, JsonRpcProvider, KeyPair, type KeyPairString } from "near-api-js";
-import { CONTRACT, FAUCET_HELPER, NEAR_NETWORK, NEAR_RPC } from "./config";
+import { CONTRACT, FAUCET_HELPER, NEAR_NETWORK, NEAR_RPC, USDC_TOKEN } from "./config";
 
 export const provider = new JsonRpcProvider({ url: NEAR_RPC });
 
@@ -39,6 +39,7 @@ export interface Offer {
   created_ms: number;
   taker: string | null;
   taker_address: string | null;
+  token: string | null;
   settlements: SettlementView[];
 }
 
@@ -52,21 +53,27 @@ export interface Config {
   trades: number;
   volume_sats: number;
   volume_near: string;
+  tokens: string[];
+  token_volume: [string, string][];
 }
 
-export const view = <T,>(method: string, args: Record<string, unknown> = {}) =>
-  provider.callFunction({ contractId: CONTRACT, method, args }) as Promise<T>;
+export const view = <T,>(method: string, args: Record<string, unknown> = {}, contractId = CONTRACT) =>
+  provider.callFunction({ contractId, method, args }) as Promise<T>;
 
 export const getOffer = (id: number) => view<Offer | null>("get_offer", { id });
 export const listOffers = (status?: Status, limit = 100) => view<Offer[]>("list_offers", { status: status ?? null, limit });
 export const getConfig = () => view<Config>("get_config");
+
+export const usdcBalance = async (accountId: string) => BigInt(await view<string>("ft_balance_of", { account_id: accountId }, USDC_TOKEN));
+export const usdcRegistered = async (accountId: string) => (await view<unknown>("storage_balance_of", { account_id: accountId }, USDC_TOKEN)) !== null;
 
 // ------------------------------------------------------------------ sessions
 
 export interface Session {
   kind: "guest" | "wallet";
   accountId: string;
-  call(method: string, args: Record<string, unknown>, deposit?: bigint, gas?: bigint): Promise<string | undefined>;
+  /** Calls `method` on the Trueque contract, or on `receiverId` when given. */
+  call(method: string, args: Record<string, unknown>, deposit?: bigint, gas?: bigint, receiverId?: string): Promise<string | undefined>;
   balance(): Promise<bigint>;
   signOut(): Promise<void>;
 }
@@ -96,13 +103,13 @@ function guestSession(accountId: string, secret: string): Session {
   return {
     kind: "guest",
     accountId,
-    async call(methodName, args, deposit = 0n, gas = 100_000_000_000_000n) {
-      const r = await account.callFunctionRaw({ contractId: CONTRACT, methodName, args, deposit, gas });
+    async call(methodName, args, deposit = 0n, gas = 100_000_000_000_000n, receiverId = CONTRACT) {
+      const r = await account.callFunctionRaw({ contractId: receiverId, methodName, args, deposit, gas });
       const failure = (r.status as { Failure?: unknown }).Failure;
       if (failure) throw new Error(describeFailure(failure));
       for (const o of r.receipts_outcome) {
         const f = (o.outcome.status as { Failure?: unknown }).Failure;
-        if (f && o.outcome.executor_id === CONTRACT) throw new Error(describeFailure(f));
+        if (f && (o.outcome.executor_id === CONTRACT || o.outcome.executor_id === receiverId)) throw new Error(describeFailure(f));
       }
       return r.transaction.hash;
     },
@@ -161,10 +168,10 @@ function walletSession(accountId: string): Session {
   return {
     kind: "wallet",
     accountId,
-    async call(methodName, args, deposit = 0n, gas = 100_000_000_000_000n) {
+    async call(methodName, args, deposit = 0n, gas = 100_000_000_000_000n, receiverId = CONTRACT) {
       const wallet = await getConnector().wallet();
       const outcome = await wallet.signAndSendTransaction({
-        receiverId: CONTRACT,
+        receiverId,
         actions: [{ type: "FunctionCall", params: { methodName, args, gas: gas.toString(), deposit: deposit.toString() } }],
       });
       const failure = (outcome?.status as { Failure?: unknown } | undefined)?.Failure;
@@ -205,6 +212,21 @@ export function toYocto(near: string): bigint {
   const [w, f = ""] = near.trim().split(".");
   return BigInt(w || "0") * YOCTO + BigInt((f + "0".repeat(24)).slice(0, 24) || "0");
 }
+
+export function formatUsdc(units: string | bigint, digits = 2): string {
+  const v = Number(BigInt(units)) / 1e6;
+  return v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: Math.max(digits, 4) });
+}
+
+export const toUsdcUnits = (usdc: string) => BigInt(Math.round(Number(usdc) * 1e6));
+
+/** "0.25 NEAR" or "1.50 USDC" for an offer's price. */
+export const priceLabel = (o: { price: string; token: string | null }) =>
+  o.token ? `${formatUsdc(o.price)} USDC` : `${formatNear(o.price)} NEAR`;
+
+/** Price as a float in its own currency. */
+export const priceValue = (o: { price: string; token: string | null }) =>
+  o.token ? Number(BigInt(o.price)) / 1e6 : Number(BigInt(o.price) / 10n ** 18n) / 1e6;
 
 export function formatNear(yocto: string | bigint, digits = 4): string {
   const v = BigInt(yocto);

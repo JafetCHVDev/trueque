@@ -1,4 +1,5 @@
 export const CONTRACT = import.meta.env.VITE_CONTRACT ?? "market.trueque.testnet";
+export const USDC_TOKEN = import.meta.env.VITE_USDC ?? "usdc.trueque.testnet";
 export const MPC_CONTRACT = "v1.signer-prod.testnet";
 export const NEAR_NETWORK = "testnet" as const;
 export const NEAR_RPC = import.meta.env.VITE_NEAR_RPC ?? "https://rpc.testnet.fastnear.com";
