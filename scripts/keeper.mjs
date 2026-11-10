@@ -3,6 +3,9 @@
 //
 //   node scripts/keeper.mjs [--once] [account]
 //
+// Runs every 5 minutes in GitHub Actions (.github/workflows/keeper.yml) in
+// broadcast only mode, so settlements reach Bitcoin even if nobody is online.
+//
 // Every 20 seconds it (1) broadcasts every fully signed settlement that Bitcoin
 // has not seen yet and (2) asks MPC again for signatures missing for more than
 // a minute (retry_signatures is permissionless). It holds no keys of any value:
@@ -13,7 +16,13 @@ import { esplora, account, broadcast, sleep, view, CONTRACT } from "./lib.mjs";
 
 const once = process.argv.includes("--once");
 const callerId = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "trueque.testnet";
-const caller = account(callerId);
+// Without a NEAR key (for example in CI) the keeper only broadcasts.
+let caller = null;
+try {
+  caller = account(callerId);
+} catch {
+  console.log("No NEAR key found: broadcast only mode");
+}
 const firstSeenUnsigned = new Map();
 
 async function known(txid) {
@@ -43,7 +52,7 @@ async function tick() {
       const key = `${o.id}:${st.txid}`;
       const since = firstSeenUnsigned.get(key) ?? Date.now();
       firstSeenUnsigned.set(key, since);
-      if (Date.now() - since > 60_000) {
+      if (caller && Date.now() - since > 60_000) {
         try {
           await caller.callFunction({ contractId: CONTRACT, methodName: "retry_signatures", args: { id: o.id }, gas: 300_000_000_000_000n });
           console.log(`[offer ${o.id}] asked MPC again (${st.signed}/${st.total} signed)`);

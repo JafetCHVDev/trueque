@@ -1,0 +1,21 @@
+name: Settlement keeper
+
+# Broadcasts every contract signed settlement that Bitcoin has not seen yet.
+# Needs no secrets: the transactions are already signed by the contract.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  broadcast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/keeper.mjs --once

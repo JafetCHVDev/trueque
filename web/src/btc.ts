@@ -55,7 +55,9 @@ export async function broadcast(hex: string): Promise<string> {
   try {
     return await esplora("/tx", { method: "POST", body: hex });
   } catch (e) {
-    if (e instanceof BroadcastError && /already|known|exists|missing-inputs|inputs-missingorspent/i.test(e.message)) {
+    // Only "already known" means done. Missing inputs means the node has not
+    // seen the deposit yet: surface it so the next poll retries.
+    if (e instanceof BroadcastError && /already in|already known|txn-already|exists/i.test(e.message)) {
       return bitcoin.Transaction.fromHex(hex).getId();
     }
     throw e;
