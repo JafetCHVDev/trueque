@@ -93,7 +93,7 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
             <span className={offer.token ? "usdc" : "near"}>{priceLabel(offer)}</span>
           </h1>
           <p className="muted">
-            {satsToBtc(offer.sats)} sBTC · {(priceValue(offer) / (offer.sats / 1e8)).toLocaleString("en-US", { maximumFractionDigits: 0 })} {offer.token ? "USDC" : "NEAR"} per BTC · by{" "}
+            {satsToBtc(offer.sats)} tBTC · {(priceValue(offer) / (offer.sats / 1e8)).toLocaleString("en-US", { maximumFractionDigits: 0 })} {offer.token ? "USDC" : "NEAR"} per BTC · by{" "}
             <span className="mono">{offer.maker}</span> · {timeAgo(offer.created_ms)}
           </p>
         </div>

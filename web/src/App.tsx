@@ -291,7 +291,7 @@ function OfferCard({ o, ref_, me, onBuy }: { o: MarketOffer; ref_: Reference | n
     <article className="offer card">
       <a href={`#/offer/${o.id}`} className="offer-main">
         <span className="btc big">{fmtSats(o.sats)} sats</span>
-        <span className="muted small">{satsToBtc(o.sats)} sBTC</span>
+        <span className="muted small">{satsToBtc(o.sats)} tBTC</span>
       </a>
       <div className="offer-price">
         <span className={`big ${o.token ? "usdc" : "near"}`}>{priceLabel(o)}</span>
