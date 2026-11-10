@@ -18,13 +18,20 @@ export interface EsploraUtxo {
   status: { confirmed: boolean; block_height?: number };
 }
 
+/** Index of the Esplora that last answered; a dead one costs a timeout once, not on every call. */
+let preferred = 0;
+
 async function esplora(path: string, init?: RequestInit): Promise<string> {
   let last: unknown;
-  for (const base of ESPLORAS) {
+  for (let k = 0; k < ESPLORAS.length; k++) {
+    const i = (preferred + k) % ESPLORAS.length;
     try {
-      const res = await fetch(base + path, { ...init, signal: AbortSignal.timeout(15_000) });
+      const res = await fetch(ESPLORAS[i] + path, { ...init, signal: AbortSignal.timeout(k === 0 ? 8_000 : 15_000) });
       const body = await res.text();
-      if (res.ok) return body;
+      if (res.ok) {
+        preferred = i;
+        return body;
+      }
       if (init?.method === "POST" && res.status === 400) throw new BroadcastError(body);
       last = new Error(`${res.status} ${body}`);
     } catch (e) {
