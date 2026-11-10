@@ -110,6 +110,7 @@ scripts/
   seed.mjs       open and fund offers (NEAR or --usdc)
   cancel.mjs     cancel an offer and broadcast its contract signed refund
   keeper.mjs     broadcasts signed settlements, retries missing MPC signatures
+                 (also runs every 5 minutes in GitHub Actions, broadcast only, no secrets)
   verify-vector.mjs  checks the contract's sighash + signature with bitcoinjs
 ```
 
