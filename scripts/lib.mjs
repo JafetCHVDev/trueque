@@ -1,6 +1,7 @@
 // Shared helpers for the Trueque scripts: NEAR testnet access with the local
-// legacy keychain, a Bitcoin signet Esplora client and a tiny P2WPKH wallet.
-// Signet coins have no value. Never put a mainnet key in .secrets/.
+// legacy keychain, a Bitcoin testnet client (Esplora for addresses, Bitcoin
+// Core RPC for transactions) and a tiny P2WPKH wallet.
+// Testnet coins have no value. Never put a mainnet key in .secrets/.
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -10,12 +11,14 @@ import * as bitcoin from "bitcoinjs-lib";
 import { ECPairFactory } from "ecpair";
 import { Account, JsonRpcProvider } from "near-api-js";
 import * as ecc from "tiny-secp256k1";
+import { rpc } from "./spv.mjs";
 
-export const CONTRACT = process.env.TRUEQUE_CONTRACT ?? "market.trueque.testnet";
+export const CONTRACT = process.env.TRUEQUE_CONTRACT ?? "trueque.testnet";
+export const LIGHT_CLIENT = "btc-client-v4.testnet";
 export const MPC = "v1.signer-prod.testnet";
-export const NETWORK = bitcoin.networks.testnet; // signet shares testnet's address format
-export const EXPLORER = "https://mempool.space/signet";
-const ESPLORAS = ["https://mempool.space/signet/api", "https://blockstream.info/signet/api"];
+export const NETWORK = bitcoin.networks.testnet;
+export const EXPLORER = "https://mempool.space/testnet";
+const ESPLORAS = ["https://mempool.space/testnet/api", "https://blockstream.info/testnet/api"];
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 bitcoin.initEccLib(ecc);
@@ -50,13 +53,47 @@ export async function esplora(path, init) {
   throw last;
 }
 
-export const utxos = async (address) => JSON.parse(await esplora(`/address/${address}/utxo`));
-export const broadcast = (hex) => esplora("/tx", { method: "POST", body: hex });
+/** UTXOs of an address: Esplora (includes the mempool), or confirmed ones from
+ * the node's UTXO set when every Esplora rate limits this IP. */
+export async function utxos(address) {
+  try {
+    return JSON.parse(await esplora(`/address/${address}/utxo`));
+  } catch (e) {
+    for (let i = 0; i < 30; i++) {
+      try {
+        const r = await rpc("scantxoutset", ["start", [`addr(${address})`]]);
+        return r.unspents.map((u) => ({ txid: u.txid, vout: u.vout, value: Math.round(u.amount * 1e8), status: { confirmed: true, block_height: u.height } }));
+      } catch (err) {
+        if (!/in progress/i.test(err.message)) throw err;
+        await sleep(5000);
+      }
+    }
+    throw e;
+  }
+}
+/** Broadcast through Bitcoin Core RPC, falling back to Esplora. */
+export async function broadcast(hex) {
+  try {
+    return await rpc("sendrawtransaction", [hex]);
+  } catch (e) {
+    if (/already|known/i.test(e.message)) return bitcoin.Transaction.fromHex(hex).getId();
+    return esplora("/tx", { method: "POST", body: hex });
+  }
+}
+
+/** Confirmations of a transaction (0 in mempool), or -1 if Bitcoin does not know it. */
+export async function confirmations(txid) {
+  try {
+    return (await rpc("getrawtransaction", [txid, true])).confirmations ?? 0;
+  } catch {
+    return -1;
+  }
+}
 
 export async function feeRate() {
   try {
-    const r = JSON.parse(await (await fetch("https://mempool.space/signet/api/v1/fees/recommended")).text());
-    return Math.max(1, r.halfHourFee ?? 1);
+    const r = JSON.parse(await (await fetch("https://mempool.space/testnet/api/v1/fees/recommended")).text());
+    return Math.min(3, Math.max(1, r.halfHourFee ?? 1));
   } catch {
     return 1;
   }
@@ -96,7 +133,7 @@ export async function send(w, to, sats) {
   return broadcast(psbt.extractTransaction().toHex());
 }
 
-/** Compressed public key -> P2WPKH signet address (independent of the contract). */
+/** Compressed public key -> P2WPKH testnet address (independent of the contract). */
 export function addressOfKey(nearSecp256k1Key) {
   const xy = Buffer.from(bs58decode(nearSecp256k1Key.replace("secp256k1:", "")));
   const pub = Buffer.concat([Buffer.from([xy[63] & 1 ? 3 : 2]), xy.subarray(0, 32)]);

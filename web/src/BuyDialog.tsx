@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { feeFor, feeRate, fmtSats, isSignetAddress, loadBtcWallet, satsToBtc } from "./btc";
+import { useEffect, useState } from "react";
+import { feeFor, feeRate, fmtSats, isTestnetAddress, loadBtcWallet, satsToBtc } from "./btc";
 import { CONTRACT, GAS_TAKE, USDC_TOKEN } from "./config";
 import { fundedTotal, type MarketOffer } from "./market";
 import { formatUsdc, priceLabel, usdcBalance, type Session } from "./near";
+import { depositProof } from "./spv";
 import { ErrorNote, Modal, Pill, Spinner } from "./ui";
+
+const MAX_DEPOSITS = 2;
 
 export function BuyDialog({
   offer,
@@ -18,10 +21,8 @@ export function BuyDialog({
 }) {
   const [address, setAddress] = useState(() => loadBtcWallet()?.address ?? "");
   const [rate, setRate] = useState(1);
-  const [acceptUnconfirmed, setAcceptUnconfirmed] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
   const [usdc, setUsdc] = useState<bigint | null>(null);
   const isToken = !!offer.token;
 
@@ -30,49 +31,42 @@ export function BuyDialog({
     feeRate().then(setRate);
     if (isToken) loadUsdc();
   }, []);
-  const short_ = isToken && usdc !== null && usdc < BigInt(offer.price);
 
   const f = offer.funding;
-  const confirmedUtxos = (f?.utxos ?? []).filter((u) => u.status.confirmed);
-  const useUtxos = useMemo(() => {
-    const confirmedTotal = confirmedUtxos.reduce((s, u) => s + u.value, 0);
-    if (confirmedTotal >= offer.sats) return confirmedUtxos;
-    return acceptUnconfirmed ? f?.utxos ?? [] : confirmedUtxos;
-  }, [f, confirmedUtxos, acceptUnconfirmed, offer.sats]);
-  const total = useUtxos.reduce((s, u) => s + u.value, 0);
-  const pendingNeeded = confirmedUtxos.reduce((s, u) => s + u.value, 0) < offer.sats && fundedTotal(f) >= offer.sats;
+  // Only confirmed deposits can be proven to the light client; largest first.
+  const confirmed = (f?.utxos ?? []).filter((u) => u.status.confirmed).sort((a, b) => b.value - a.value);
+  const use: typeof confirmed = [];
+  for (const u of confirmed) {
+    if (use.reduce((s, x) => s + x.value, 0) >= offer.sats || use.length >= MAX_DEPOSITS) break;
+    use.push(u);
+  }
+  const total = use.reduce((s, u) => s + u.value, 0);
+  const covered = total >= offer.sats;
+  const waitingForBlock = !covered && fundedTotal(f) >= offer.sats;
   const change = total - offer.sats;
-  const fee = feeFor(Math.max(1, useUtxos.length), change >= 546 ? 2 : 1, rate);
+  const fee = feeFor(Math.max(1, use.length), change >= 546 ? 2 : 1, rate);
   const receive = offer.sats - fee;
-  const addrOk = isSignetAddress(address);
-  const covered = total >= offer.sats && useUtxos.length > 0 && useUtxos.length <= 4;
+  const addrOk = isTestnetAddress(address);
+  const shortUsdc = isToken && usdc !== null && usdc < BigInt(offer.price);
 
   async function buy() {
-    setBusy(true);
     setError(null);
     try {
-      const take = {
-        id: offer.id,
-        btc_address: address.trim(),
-        utxos: useUtxos.map(({ txid, vout, value }) => ({ txid, vout, value })),
-        fee_sats: fee,
-      };
+      setBusy("Building the SPV proof of the deposit…");
+      const deposits = await Promise.all(use.map((u) => depositProof(u.txid, u.vout)));
+      const take = { id: offer.id, btc_address: address.trim(), deposits, fee_sats: fee };
+      setBusy("Paying; the NEAR Bitcoin light client checks the proof…");
       if (isToken) {
-        // Stablecoin: the token transfers the price to Trueque and calls ft_on_transfer.
-        await session.call(
-          "ft_transfer_call",
-          { receiver_id: CONTRACT, amount: offer.price, msg: JSON.stringify(take) },
-          1n,
-          GAS_TAKE,
-          offer.token!,
-        );
+        // The token sends the price to Trueque and calls ft_on_transfer. If the
+        // proof fails, the token returns the whole amount.
+        await session.call("ft_transfer_call", { receiver_id: CONTRACT, amount: offer.price, msg: JSON.stringify(take) }, 1n, GAS_TAKE, offer.token!);
       } else {
         await session.call("take_offer", take, BigInt(offer.price), GAS_TAKE);
       }
       onTaken(offer.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -89,34 +83,32 @@ export function BuyDialog({
         <div>
           <span className="label">You receive</span>
           <strong className="big btc">{fmtSats(Math.max(0, receive))} sats</strong>
-          <span className="muted small">{satsToBtc(Math.max(0, receive))} sBTC</span>
+          <span className="muted small">{satsToBtc(Math.max(0, receive))} tBTC</span>
         </div>
       </div>
 
       <label className="field">
-        <span>Your Bitcoin signet address</span>
-        <input
-          className="mono"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="tb1q…"
-          spellCheck={false}
-          autoComplete="off"
-        />
+        <span>Your Bitcoin testnet address</span>
+        <input className="mono" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="tb1q…" spellCheck={false} autoComplete="off" />
         {!address && (
           <button type="button" className="link-btn" onClick={() => setAddress(loadBtcWallet(true)!.address)}>
-            Create an in-browser signet wallet for me
+            Create an in-browser testnet wallet for me
           </button>
         )}
-        {address && !addrOk && <span className="error small">Enter a signet segwit address (tb1…)</span>}
+        {address && !addrOk && <span className="error small">Enter a testnet segwit address (tb1…)</span>}
       </label>
 
       <dl className="facts">
         <div>
-          <dt>Deposit at the offer address</dt>
+          <dt>Deposit at the escrow</dt>
           <dd>
-            {fmtSats(fundedTotal(f))} sats {f && f.pending > 0 ? <Pill tone="warn">{fmtSats(f.pending)} unconfirmed</Pill> : <Pill tone="ok">confirmed</Pill>}
+            {fmtSats(fundedTotal(f))} sats{" "}
+            {covered ? <Pill tone="ok">confirmed</Pill> : <Pill tone="warn">waiting for a block</Pill>}
           </dd>
+        </div>
+        <div>
+          <dt>Deposit check</dt>
+          <dd>On chain, by the NEAR Bitcoin light client (SPV proof, at least 1 confirmation)</dd>
         </div>
         <div>
           <dt>Bitcoin miner fee</dt>
@@ -135,7 +127,7 @@ export function BuyDialog({
             <dt>Your test USDC</dt>
             <dd>
               {usdc === null ? "…" : `${formatUsdc(usdc)} USDC`}{" "}
-              {short_ && (
+              {shortUsdc && (
                 <button
                   type="button"
                   className="link-btn"
@@ -155,19 +147,15 @@ export function BuyDialog({
           </div>
         )}
         <div>
-          <dt>Settlement</dt>
-          <dd>Atomic: your {isToken ? "USDC" : "NEAR"} only reaches the seller once NEAR MPC has signed your BTC payout.</dd>
+          <dt>If something fails</dt>
+          <dd>A rejected proof returns your payment at once; unsigned payouts can be reclaimed after an hour.</dd>
         </div>
       </dl>
 
-      {pendingNeeded && (
-        <label className="check">
-          <input type="checkbox" checked={acceptUnconfirmed} onChange={(e) => setAcceptUnconfirmed(e.target.checked)} />
-          <span>
-            Part of the deposit is still unconfirmed. Until it confirms, the seller could replace that deposit. Accept the risk to
-            buy now, or wait for a block.
-          </span>
-        </label>
+      {waitingForBlock && (
+        <p className="muted small">
+          The seller's deposit is in the mempool. Once it is in a block, the contract can verify it and you can buy.
+        </p>
       )}
 
       <ErrorNote error={error} />
@@ -175,10 +163,10 @@ export function BuyDialog({
         <button className="btn ghost" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn primary" disabled={!addrOk || !covered || busy || receive < 546 || short_} onClick={buy}>
+        <button className="btn primary" disabled={!addrOk || !covered || !!busy || receive < 546 || shortUsdc} onClick={buy}>
           {busy ? (
             <>
-              <Spinner /> Confirming…
+              <Spinner /> {busy}
             </>
           ) : (
             `Pay ${priceLabel(offer)}`

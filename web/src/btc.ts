@@ -1,14 +1,15 @@
-// Bitcoin signet side: Esplora client, address checks, fee estimates and a
-// small in-browser P2WPKH wallet for guests (signet coins have no value).
+// Bitcoin testnet side: address lookups (Esplora), transactions and
+// broadcasts (Bitcoin Core RPC, Esplora as fallback), fee estimates and a small
+// in-browser P2WPKH wallet for guests (testnet coins have no value).
 
 import ecc from "@bitcoinerlab/secp256k1";
 import * as bitcoin from "bitcoinjs-lib";
 import { ECPairFactory } from "ecpair";
-import { ESPLORAS } from "./config";
+import { BTC_RPC, ESPLORAS } from "./config";
 
 bitcoin.initEccLib(ecc);
 const ECPair = ECPairFactory(ecc);
-export const NET = bitcoin.networks.testnet; // signet shares testnet's address format
+export const NET = bitcoin.networks.testnet;
 
 export interface EsploraUtxo {
   txid: string;
@@ -36,24 +37,69 @@ async function esplora(path: string, init?: RequestInit): Promise<string> {
 
 export class BroadcastError extends Error {}
 
-export const getUtxos = async (address: string): Promise<EsploraUtxo[]> => JSON.parse(await esplora(`/address/${address}/utxo`));
+async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+  const res = await fetch(BTC_RPC, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  const j = await res.json();
+  if (j.error) throw new BroadcastError(j.error.message ?? JSON.stringify(j.error));
+  return j.result as T;
+}
+
+/** UTXOs of an address: Esplora (includes the mempool), or confirmed ones from
+ * the node's UTXO set when the public Esploras rate limit this browser. */
+export async function getUtxos(address: string): Promise<EsploraUtxo[]> {
+  try {
+    return JSON.parse(await esplora(`/address/${address}/utxo`));
+  } catch (e) {
+    for (let i = 0; i < 6; i++) {
+      try {
+        const r = await rpc<{ unspents: { txid: string; vout: number; amount: number; height: number }[] }>("scantxoutset", ["start", [`addr(${address})`]]);
+        return r.unspents.map((u) => ({ txid: u.txid, vout: u.vout, value: Math.round(u.amount * 1e8), status: { confirmed: true, block_height: u.height } }));
+      } catch (err) {
+        if (!(err instanceof Error) || !/in progress/i.test(err.message)) throw err;
+        await new Promise((r) => setTimeout(r, 4000));
+      }
+    }
+    throw e;
+  }
+}
 export const tipHeight = async () => Number(await esplora("/blocks/tip/height"));
 
-/** Esplora's /tx/:id/status answers {confirmed:false} even for unknown
- * transactions, so existence is checked on /tx/:id, which 404s. */
-export async function txStatus(txid: string): Promise<{ found: boolean; confirmed: boolean; block_height?: number }> {
+export interface TxState {
+  found: boolean;
+  confirmed: boolean;
+  confirmations?: number;
+}
+
+/** Whether Bitcoin knows a transaction, from the node's mempool or chain. */
+export async function txStatus(txid: string): Promise<TxState> {
   try {
-    const tx = JSON.parse(await esplora(`/tx/${txid}`));
-    return { found: true, confirmed: !!tx.status?.confirmed, block_height: tx.status?.block_height };
+    const tx = await rpc<{ confirmations?: number }>("getrawtransaction", [txid, true]);
+    return { found: true, confirmed: (tx.confirmations ?? 0) > 0, confirmations: tx.confirmations ?? 0 };
   } catch {
-    return { found: false, confirmed: false };
+    // Esplora's /tx/:id/status answers even for unknown txids; /tx/:id 404s.
+    try {
+      const tx = JSON.parse(await esplora(`/tx/${txid}`));
+      return { found: true, confirmed: !!tx.status?.confirmed };
+    } catch {
+      return { found: false, confirmed: false };
+    }
   }
 }
 
 /** Broadcast; an already-known transaction counts as success. */
 export async function broadcast(hex: string): Promise<string> {
   try {
-    return await esplora("/tx", { method: "POST", body: hex });
+    try {
+      return await rpc<string>("sendrawtransaction", [hex]);
+    } catch (e) {
+      if (e instanceof BroadcastError && /already|known|exists/i.test(e.message)) throw e;
+      return await esplora("/tx", { method: "POST", body: hex });
+    }
   } catch (e) {
     // Only "already known" means done. Missing inputs means the node has not
     // seen the deposit yet: surface it so the next poll retries.
@@ -64,11 +110,11 @@ export async function broadcast(hex: string): Promise<string> {
   }
 }
 
-/** Signet fee rate in sat/vB. Signet blocks are rarely full and public
- * estimators overshoot wildly there, so this stays between 1 and 3. */
+/** Testnet fee rate in sat/vB. Public estimators overshoot wildly on test
+ * networks, so this stays between 1 and 3. */
 export async function feeRate(): Promise<number> {
   try {
-    const r = await fetch("https://mempool.space/signet/api/v1/fees/recommended", { signal: AbortSignal.timeout(8000) });
+    const r = await fetch("https://mempool.space/testnet/api/v1/fees/recommended", { signal: AbortSignal.timeout(8000) });
     const j = await r.json();
     return Math.min(3, Math.max(1, Math.ceil(j.halfHourFee ?? 1)));
   } catch {
@@ -82,7 +128,7 @@ export function feeFor(nIn: number, nOut: number, rate: number): number {
   return Math.max(vsize, Math.ceil(vsize * rate)) + 20;
 }
 
-export function isSignetAddress(a: string): boolean {
+export function isTestnetAddress(a: string): boolean {
   try {
     bitcoin.address.toOutputScript(a.trim(), NET);
     return /^tb1/i.test(a.trim());
@@ -137,7 +183,7 @@ export function loadBtcWallet(create = false): BtcWallet | null {
         if (total >= sats + feeFor(psbt.inputCount, 2, rate)) break;
       }
       const fee = feeFor(psbt.inputCount, 2, rate);
-      if (total < sats + fee) throw new Error(`Your signet wallet has ${fmtSats(total)} sats; this needs ${fmtSats(sats + fee)} including the miner fee.`);
+      if (total < sats + fee) throw new Error(`Your testnet wallet has ${fmtSats(total)} sats; this needs ${fmtSats(sats + fee)} including the miner fee.`);
       psbt.addOutput({ address: to, value: BigInt(sats) });
       const change = total - sats - fee;
       if (change >= 546) psbt.addOutput({ address, value: BigInt(change) });

@@ -1,0 +1,12 @@
+{
+  "offer": 0,
+  "near_tx": "https://testnet.nearblocks.io/txns/2aU88Say7vrYADzXeUNzrApE1zDi8JoaqPj8LMN1NoaU",
+  "status_after": "Open",
+  "settlements_after": 0,
+  "taker_spent_near": 0.0009472311688537,
+  "events": [
+    "EVENT_JSON:{\"standard\":\"trueque\",\"version\":\"2.0.0\",\"event\":\"offer_verifying\",\"data\":[{\"id\":0,\"taker\":\"trueque-taker.testnet\"}]}",
+    "EVENT_JSON:{\"standard\":\"trueque\",\"version\":\"2.0.0\",\"event\":\"take_rejected\",\"data\":[{\"id\":0,\"taker\":\"trueque-taker.testnet\",\"reason\":\"deposit not proven\"}]}"
+  ],
+  "passed": true
+}

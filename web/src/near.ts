@@ -8,7 +8,7 @@ import { CONTRACT, FAUCET_HELPER, NEAR_NETWORK, NEAR_RPC, USDC_TOKEN } from "./c
 
 export const provider = new JsonRpcProvider({ url: NEAR_RPC });
 
-export type Status = "Deriving" | "Open" | "Taken" | "Settled" | "Cancelled" | "Failed";
+export type Status = "Deriving" | "Open" | "Verifying" | "Taken" | "Settled" | "Cancelled" | "Failed";
 
 export interface Utxo {
   txid: string;
@@ -25,6 +25,9 @@ export interface SettlementView {
   total: number;
   txid: string;
   raw_tx: string | null;
+  requested_ms: number;
+  voided: boolean;
+  verified_confirmations: number;
 }
 
 export interface Offer {
@@ -40,6 +43,7 @@ export interface Offer {
   taker: string | null;
   taker_address: string | null;
   token: string | null;
+  pending_taker: string | null;
   settlements: SettlementView[];
 }
 
@@ -53,6 +57,9 @@ export interface Config {
   trades: number;
   volume_sats: number;
   volume_near: string;
+  light_client: string | null;
+  min_confirmations: number;
+  reclaim_after_ms: number;
   tokens: string[];
   token_volume: [string, string][];
 }

@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import { balanceOf, broadcast, feeFor, feeRate, fmtSats, loadBtcWallet, satsToBtc, short, txStatus } from "./btc";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { balanceOf, broadcast, feeFor, feeRate, fmtSats, loadBtcWallet, satsToBtc, short, txStatus, type TxState } from "./btc";
 import { BuyDialog } from "./BuyDialog";
-import { BTC_EXPLORER, CONTRACT, MPC_CONTRACT, NEAR_EXPLORER } from "./config";
-import { fundedTotal, fundingOf, type Funding } from "./market";
+import { BTC_EXPLORER, CONTRACT, LIGHT_CLIENT, MPC_CONTRACT, NEAR_EXPLORER } from "./config";
+import { cachedFunding, fundedTotal, type Funding } from "./market";
 import { getOffer, priceLabel, priceValue, type Offer, type Session, type SettlementView } from "./near";
 import { Copy, ErrorNote, Ext, Pill, Qr, Spinner, timeAgo } from "./ui";
 
-type TxState = { found: boolean; confirmed: boolean; block_height?: number };
 
 export function OfferPage({ id, session, onConnect }: { id: number; session: Session | null; onConnect: () => void }) {
   const [offer, setOffer] = useState<Offer | null | undefined>(undefined);
@@ -16,14 +15,17 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const known = useRef(new Map<string, TxState>());
+  const refresh = useCallback(async (force = false) => {
+    if (document.visibilityState === "hidden") return;
     const o = await getOffer(id).catch(() => undefined);
     if (o === undefined) return;
     setOffer(o);
     if (!o) return;
-    if (o.deposit_address) fundingOf(o.deposit_address).then(setFunding, () => {});
+    // Funding only matters until the offer is taken; leftovers matter to the maker after.
+    if (o.deposit_address) cachedFunding(o.deposit_address, o.sats, force).then((f) => f && setFunding(f), () => {});
     for (const st of o.settlements) {
-      if (!st.raw_tx) continue;
+      if (!st.raw_tx || known.current.get(st.txid)?.confirmed) continue;
       let s = await txStatus(st.txid);
       if (!s.found) {
         // Anyone can broadcast a signed settlement; the page does it for you.
@@ -34,13 +36,14 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
           /* parent not visible yet: retried on the next poll */
         }
       }
+      known.current.set(st.txid, s);
       setTxs((prev) => ({ ...prev, [st.txid]: s }));
     }
   }, [id]);
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 4000);
+    refresh(true);
+    const t = setInterval(() => refresh(), 6000);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -49,8 +52,10 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
 
   const me = session?.accountId;
   const isMaker = me === offer.maker;
-  const release = offer.settlements.find((s) => s.kind === "Release");
-  const refunds = offer.settlements.filter((s) => s.kind === "Refund");
+  const release = offer.settlements.filter((s) => s.kind === "Release" && !s.voided).at(-1);
+  const abandoned = offer.settlements.filter((s) => s.voided);
+  const reclaimAt = release && !release.raw_tx ? release.requested_ms + 60 * 60 * 1000 : null;
+  const refunds = offer.settlements.filter((s) => s.kind === "Refund" && !s.voided);
   const funded = fundedTotal(funding);
   const usedOutpoints = new Set(offer.settlements.flatMap((s) => s.inputs.map((i) => `${i.txid}:${i.vout}`)));
   const leftovers = (funding?.utxos ?? []).filter((u) => !usedOutpoints.has(`${u.txid}:${u.vout}`));
@@ -141,8 +146,17 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
             )}
           </Step>
 
-          <Step done={!!offer.taker} active={offer.status === "Open" && funded >= offer.sats} title={`Buyer pays ${offer.token ? "USDC" : "NEAR"} into the contract`}>
-            {offer.taker ? (
+          <Step
+            done={!!offer.taker}
+            active={(offer.status === "Open" && funded >= offer.sats) || offer.status === "Verifying"}
+            title={`Buyer pays ${offer.token ? "USDC" : "NEAR"} into the contract`}
+          >
+            {offer.status === "Verifying" ? (
+              <p>
+                <span className="mono">{offer.pending_taker}</span> paid. The NEAR Bitcoin light client is checking the deposit proof
+                right now.
+              </p>
+            ) : offer.taker ? (
               <p>
                 <span className="mono">{offer.taker}</span> paid {priceLabel(offer)}. Payout to{" "}
                 <span className="mono">{short(offer.taker_address ?? "", 10)}</span>.
@@ -156,6 +170,17 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
 
           {release && (
             <>
+              <Step done={release.verified_confirmations > 0} title="Deposit proven on chain">
+                {release.verified_confirmations > 0 ? (
+                  <p>
+                    The contract parsed the deposit transaction itself and <code>{LIGHT_CLIENT}</code>, a Bitcoin light client on
+                    NEAR, confirmed it is in the Bitcoin chain with at least {release.verified_confirmations} confirmation(s) (SPV
+                    Merkle proof). Nobody's word was needed.
+                  </p>
+                ) : (
+                  <p className="muted">Deposit checked by the buyer's client (network without a light client).</p>
+                )}
+              </Step>
               <Step done={release.signed === release.total} active={release.signed < release.total} title="NEAR MPC signs the Bitcoin payout">
                 <SettlementBody st={release} session={session} offerId={offer.id} busy={busy} act={act} />
               </Step>
@@ -164,6 +189,15 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
               </Step>
             </>
           )}
+
+          {abandoned.map((st) => (
+            <Step key={st.txid} done={false} title="Abandoned payout">
+              <p className="muted">
+                MPC did not sign this payout within an hour, so the buyer reclaimed the payment and the offer reopened. This
+                transaction can never be signed again.
+              </p>
+            </Step>
+          ))}
 
           {refunds.map((st) => (
             <Step key={st.txid} done={!!txs[st.txid]?.confirmed} active={!txs[st.txid]?.confirmed} title="Refund to the seller">
@@ -177,7 +211,7 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
           {offer.status === "Open" && !isMaker && (
             <>
               <h3>Buy this offer</h3>
-              <p className="muted small">Pay in {offer.token ? "USDC" : "NEAR"}, receive native BTC on signet. No bridge, no wrapped token.</p>
+              <p className="muted small">Pay in {offer.token ? "USDC" : "NEAR"}, receive native BTC on Bitcoin testnet. No bridge, no wrapped token.</p>
               <button
                 className="btn primary wide"
                 disabled={funded < offer.sats}
@@ -205,6 +239,22 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
               <p className="muted small">{fmtSats(leftovers.reduce((s, u) => s + u.value, 0))} sats arrived after the offer closed.</p>
               <button className="btn ghost wide" disabled={!!busy} onClick={() => act("recover", async () => session!.call("recover", await refundArgs(leftovers)))}>
                 {busy === "recover" ? <Spinner /> : "Recover to my address"}
+              </button>
+            </>
+          )}
+          {offer.status === "Taken" && reclaimAt && (
+            <>
+              <h3>Waiting for MPC</h3>
+              <p className="muted small">
+                If the payout is still unsigned an hour after the last request, the buyer can take the payment back and the offer
+                reopens.
+              </p>
+              <button
+                className="btn ghost wide"
+                disabled={!!busy || !session || Date.now() < reclaimAt}
+                onClick={() => act("reclaim", () => session!.call("reclaim_payment", { id: offer.id }))}
+              >
+                {busy === "reclaim" ? <Spinner /> : Date.now() < reclaimAt ? `Reclaim available ${new Date(reclaimAt).toLocaleTimeString()}` : "Reclaim the payment"}
               </button>
             </>
           )}
@@ -246,7 +296,7 @@ export function OfferPage({ id, session, onConnect }: { id: number; session: Ses
 }
 
 function StatusPill({ status }: { status: Offer["status"] }) {
-  const tone = { Deriving: "neutral", Open: "btc", Taken: "near", Settled: "ok", Cancelled: "neutral", Failed: "bad" } as const;
+  const tone = { Deriving: "neutral", Open: "btc", Verifying: "warn", Taken: "near", Settled: "ok", Cancelled: "neutral", Failed: "bad" } as const;
   return <Pill tone={tone[status]}>{status}</Pill>;
 }
 
@@ -308,7 +358,7 @@ function BroadcastBody({ st, tx }: { st: SettlementView; tx?: TxState }) {
     <>
       <p>
         {tx?.confirmed ? (
-          <Pill tone="ok">confirmed in block {tx.block_height}</Pill>
+          <Pill tone="ok">{tx.confirmations ? `${tx.confirmations} confirmation${tx.confirmations > 1 ? "s" : ""}` : "confirmed"}</Pill>
         ) : tx?.found ? (
           <Pill tone="warn">in mempool</Pill>
         ) : (

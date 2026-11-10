@@ -23,14 +23,33 @@ export async function fundingOf(address: string): Promise<Funding> {
   };
 }
 
-/** All offers (newest first) plus the live BTC funding of the open ones. Polls. */
-export function useMarket(intervalMs = 15_000) {
+/** Funding that cannot change any more: confirmed and covering the offer.
+ * Only the contract can spend from an escrow, so it stays until settlement. */
+const settledFunding = new Map<string, Funding>();
+const lastChecked = new Map<string, number>();
+const RECHECK_MS = 60_000;
+
+/** Funding of an escrow, hitting the Bitcoin APIs only when it can still change. */
+export async function cachedFunding(address: string, sats: number, force = false): Promise<Funding | undefined> {
+  const done = settledFunding.get(address);
+  if (done) return done;
+  if (!force && Date.now() - (lastChecked.get(address) ?? 0) < RECHECK_MS) return undefined;
+  lastChecked.set(address, Date.now());
+  const f = await fundingOf(address);
+  if (f.confirmed >= sats) settledFunding.set(address, f);
+  return f;
+}
+
+/** All offers (newest first) plus the BTC funding of the open ones. Polls
+ * while the tab is visible, sparing the public Bitcoin APIs. */
+export function useMarket(intervalMs = 20_000) {
   const [offers, setOffers] = useState<MarketOffer[] | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [error, setError] = useState<string | null>(null);
   const funding = useRef(new Map<number, Funding>());
 
   const refresh = useCallback(async () => {
+    if (document.visibilityState === "hidden") return;
     try {
       const [all, cfg] = await Promise.all([listOffers(undefined, 100), getConfig()]);
       setConfig(cfg);
@@ -38,7 +57,8 @@ export function useMarket(intervalMs = 15_000) {
       await Promise.all(
         open.map(async (o) => {
           try {
-            funding.current.set(o.id, await fundingOf(o.deposit_address!));
+            const f = await cachedFunding(o.deposit_address!, o.sats);
+            if (f) funding.current.set(o.id, f);
           } catch {
             /* keep last known */
           }
@@ -54,7 +74,11 @@ export function useMarket(intervalMs = 15_000) {
   useEffect(() => {
     refresh();
     const t = setInterval(refresh, intervalMs);
-    return () => clearInterval(t);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [refresh, intervalMs]);
 
   return { offers, config, error, refresh };

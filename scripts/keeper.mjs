@@ -12,7 +12,7 @@
 // the NEAR account only pays gas, and the Bitcoin transactions were already
 // signed by the contract.
 
-import { esplora, account, broadcast, sleep, view, CONTRACT } from "./lib.mjs";
+import { account, broadcast, confirmations, sleep, view, CONTRACT } from "./lib.mjs";
 
 const once = process.argv.includes("--once");
 const callerId = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "trueque.testnet";
@@ -25,14 +25,7 @@ try {
 }
 const firstSeenUnsigned = new Map();
 
-async function known(txid) {
-  try {
-    await esplora(`/tx/${txid}`); // /status would answer even for unknown txids
-    return true;
-  } catch {
-    return false;
-  }
-}
+const known = async (txid) => (await confirmations(txid)) >= 0;
 
 async function tick() {
   const offers = await view("list_offers", { status: null, limit: 100 });

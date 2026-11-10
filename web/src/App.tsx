@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { balanceOf, fmtSats, loadBtcWallet, satsToBtc, short } from "./btc";
 import { BuyDialog } from "./BuyDialog";
-import { BTC_EXPLORER, CONTRACT, MPC_CONTRACT, NEAR_EXPLORER, REPO_URL } from "./config";
+import { BTC_EXPLORER, CONTRACT, LIGHT_CLIENT, MPC_CONTRACT, NEAR_EXPLORER, REPO_URL } from "./config";
 import { fundedTotal, refFor, useMarket, useReferenceRate, type MarketOffer, type Reference } from "./market";
 import { connectWallet, createGuest, formatNear, formatUsdc, priceLabel, priceValue, restoreSession, usdcBalance, type Session } from "./near";
 import { OfferPage } from "./OfferPage";
@@ -106,7 +106,7 @@ function Header({ session, onSignin, onSignOut }: { session: Session | null; onS
         <a href="#how">How it works</a>
       </nav>
       <div className="top-right">
-        <Pill tone="neutral">testnet · signet</Pill>
+        <Pill tone="neutral">NEAR testnet · BTC testnet</Pill>
         {session ? (
           <div className="account">
             <span className="mono small">{short(session.accountId, 10)}</span>
@@ -365,7 +365,7 @@ function Activity({ session, offers, onSignin }: { session: Session | null; offe
       {w && (
         <div className="card wallet-card">
           <div>
-            <span className="label">In-browser signet wallet</span>
+            <span className="label">In-browser testnet wallet</span>
             <Copy text={w.address} />
           </div>
           <div>
@@ -431,20 +431,20 @@ function HowItWorks() {
         </div>
         <div className="card">
           <span className="num">2</span>
-          <h3>The contract writes the Bitcoin transaction</h3>
+          <h3>The deposit is proven, not claimed</h3>
           <p>
-            When a buyer pays the price (USDC or NEAR), the contract builds the payout transaction on chain: the deposit as inputs, the
-            buyer's address (and change back to the seller) as outputs. It computes each BIP143 sighash itself and asks MPC to sign
-            them. The buyer cannot redirect the coins, and the seller cannot take them back.
+            A buyer pays the price (USDC or NEAR) together with the raw deposit transaction and its SPV proof. The contract parses
+            the transaction itself (txid, amount, escrow output) and asks <code>{LIGHT_CLIENT}</code>, a Bitcoin light client on
+            NEAR, to confirm it sits in the chain. If not, the payment goes straight back.
           </p>
         </div>
         <div className="card">
           <span className="num">3</span>
-          <h3>Verified, then settled</h3>
+          <h3>The contract writes and signs the payout</h3>
           <p>
-            Each returned signature is checked on chain with <code>ecrecover</code> against the derived key. Only when every input is
-            signed does the contract pay the seller. The signed transaction is stored in the contract, so anyone can broadcast it;
-            this site does it for you.
+            The contract builds the Bitcoin transaction (deposit in, buyer's address out), computes each BIP143 sighash and asks MPC
+            to sign. Every signature is checked with <code>ecrecover</code>; only then is the seller paid. The signed transaction is
+            public, so anyone can broadcast it; this site does it for you.
           </p>
         </div>
       </div>
@@ -460,9 +460,12 @@ function HowItWorks() {
             that, only a refund to the seller. Coins used by one settlement can never be signed again.
           </li>
           <li>
-            <strong>The buyer's own check of the deposit.</strong> The contract cannot read Bitcoin, so the buyer's client verifies
-            the UTXOs at the escrow address (this site shows confirmations). Verifying deposits on chain with a Bitcoin light client
-            is next on the roadmap.
+            <strong>The Bitcoin light client</strong> (<code>{LIGHT_CLIENT}</code>, by Near-One) to follow the heaviest Bitcoin
+            chain, which it checks header by header, proof of work included.
+          </li>
+          <li>
+            <strong>Nothing else.</strong> If MPC never signs a payout, the buyer reclaims the payment after an hour and the offer
+            reopens; a late signature for the abandoned payout is ignored.
           </li>
         </ul>
       </div>
@@ -543,7 +546,7 @@ function Footer() {
       <span className="foot-links">
         <Ext href={REPO_URL}>Source</Ext>
         <Ext href={`${NEAR_EXPLORER}/address/${CONTRACT}`}>Contract</Ext>
-        <span className="muted">Testnet and signet only. Test coins have no value.</span>
+        <span className="muted">Testnet only. Test coins have no value.</span>
       </span>
     </footer>
   );

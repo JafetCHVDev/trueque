@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fmtSats, isSignetAddress, loadBtcWallet } from "./btc";
+import { fmtSats, isTestnetAddress, loadBtcWallet } from "./btc";
 import { GAS_DEFAULT, USDC_TOKEN } from "./config";
 import { useReferenceRate } from "./market";
 import { listOffers, toUsdcUnits, toYocto, usdcRegistered, type Session } from "./near";
@@ -27,7 +27,7 @@ export function SellForm({ session, onCreated, onConnect }: { session: Session |
   const refRate = ref ? (currency === "USDC" ? ref.usdPerBtc : ref.nearPerBtc) : null;
   const implied = satsN > 0 && priceN > 0 ? priceN / (satsN / 1e8) : null;
   const premium = implied && refRate ? (implied / refRate - 1) * 100 : null;
-  const valid = Number.isInteger(satsN) && satsN >= 1000 && priceN > 0 && isSignetAddress(refund);
+  const valid = Number.isInteger(satsN) && satsN >= 1000 && priceN > 0 && isTestnetAddress(refund);
 
   function switchTo(c: Currency) {
     setCurrency(c);
@@ -105,11 +105,11 @@ export function SellForm({ session, onCreated, onConnect }: { session: Session |
         </label>
       </div>
       <label className="field">
-        <span>Your Bitcoin signet address (for refunds and change)</span>
+        <span>Your Bitcoin testnet address (for refunds and change)</span>
         <input className="mono" value={refund} onChange={(e) => setRefund(e.target.value)} placeholder="tb1q…" spellCheck={false} />
         {!refund && (
           <button type="button" className="link-btn" onClick={() => setRefund(loadBtcWallet(true)!.address)}>
-            Use an in-browser signet wallet
+            Use an in-browser testnet wallet
           </button>
         )}
       </label>
