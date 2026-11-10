@@ -17,8 +17,10 @@ export const CONTRACT = process.env.TRUEQUE_CONTRACT ?? "trueque.testnet";
 export const LIGHT_CLIENT = "btc-client-v4.testnet";
 export const MPC = "v1.signer-prod.testnet";
 export const NETWORK = bitcoin.networks.testnet;
-export const EXPLORER = "https://mempool.space/testnet";
-const ESPLORAS = ["https://mempool.space/testnet/api", "https://blockstream.info/testnet/api"];
+/** BTC_NETWORK=signet operates the v1 contract (market.trueque.testnet). */
+export const BTC_NETWORK = process.env.BTC_NETWORK ?? "testnet";
+export const EXPLORER = `https://mempool.space/${BTC_NETWORK}`;
+const ESPLORAS = [`https://blockstream.info/${BTC_NETWORK}/api`, `https://mempool.space/${BTC_NETWORK}/api`];
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 bitcoin.initEccLib(ecc);
@@ -73,6 +75,7 @@ export async function utxos(address) {
 }
 /** Broadcast through Bitcoin Core RPC, falling back to Esplora. */
 export async function broadcast(hex) {
+  if (BTC_NETWORK !== "testnet") return esplora("/tx", { method: "POST", body: hex });
   try {
     return await rpc("sendrawtransaction", [hex]);
   } catch (e) {
@@ -92,7 +95,7 @@ export async function confirmations(txid) {
 
 export async function feeRate() {
   try {
-    const r = JSON.parse(await (await fetch("https://mempool.space/testnet/api/v1/fees/recommended")).text());
+    const r = JSON.parse(await (await fetch(`https://mempool.space/${BTC_NETWORK}/api/v1/fees/recommended`, { signal: AbortSignal.timeout(8000) })).text());
     return Math.min(3, Math.max(1, r.halfHourFee ?? 1));
   } catch {
     return 1;
