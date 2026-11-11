@@ -40,6 +40,9 @@ const DOMAIN_ID: u32 = 0; // secp256k1 signing domain of the MPC contract
 const MIN_SATS: u64 = 1_000;
 const MAX_INPUTS: usize = 2;
 const MAX_FEE_BPS: u16 = 500;
+/// Bounds the storage one offer can make the contract pay for (refunds,
+/// recoveries and abandoned payouts each add a settlement).
+const MAX_SETTLEMENTS: usize = 6;
 /// A taker can reclaim the payment if MPC has not signed this long after the
 /// last request. MPC sign requests expire within minutes, so no signature can
 /// appear after this point.
@@ -645,9 +648,11 @@ impl Trueque {
 
     // ---------------------------------------------------------------- owner
 
+    /// The fee applies when an offer settles, so it can only go down: an open
+    /// offer never pays more than the fee shown when it was created.
     pub fn set_fee_bps(&mut self, fee_bps: u16) {
         self.assert_owner();
-        require!(fee_bps <= MAX_FEE_BPS, "Fee too high");
+        require!(fee_bps <= self.fee_bps, "The fee can only be lowered");
         self.fee_bps = fee_bps;
     }
 
@@ -973,6 +978,7 @@ fn check_fee(fee_sats: u64, n_in: usize, outputs: &[Output], amount: u64) {
 }
 
 fn push_settlement(offer: &mut Offer, kind: Kind, inputs: Vec<Input>, outputs: Vec<Output>, verified_confirmations: u64) -> u32 {
+    require!(offer.settlements.len() < MAX_SETTLEMENTS, "Too many settlements for this offer");
     let pk = offer.pubkey();
     let pkh = btc::hash160(&pk);
     let sighashes = (0..inputs.len()).map(|i| btc::sighash_p2wpkh(&inputs, &outputs, i, &pkh).to_vec()).collect();

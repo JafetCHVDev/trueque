@@ -464,3 +464,28 @@ fn list_filters_by_status() {
     assert_eq!(c.list_offers(Some(Status::Open), None, None).len(), 1);
     assert_eq!(c.list_offers(Some(Status::Deriving), None, None)[0].id, 1);
 }
+
+#[test]
+#[should_panic(expected = "Too many settlements for this offer")]
+fn settlements_per_offer_are_capped() {
+    let mut c = setup(true);
+    let id = open_offer(&mut c, false);
+    ctx(accounts(1), NearToken::from_yoctonear(0));
+    c.cancel_offer(id, vec![Utxo { txid: HASH.into(), vout: 0, value: 10_000 }], 200);
+    sign_all(&mut c, id, &key(), 0);
+    for vout in 1..=MAX_SETTLEMENTS as u32 {
+        ctx(accounts(1), NearToken::from_yoctonear(0));
+        c.recover(id, vec![Utxo { txid: HASH.into(), vout, value: 10_000 }], 200);
+        sign_all(&mut c, id, &key(), vout as usize);
+    }
+}
+
+#[test]
+fn fee_can_only_be_lowered() {
+    let mut c = setup(true);
+    ctx(accounts(0), NearToken::from_yoctonear(0));
+    c.set_fee_bps(10);
+    assert_eq!(c.get_config().fee_bps, 10);
+    let raised = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.set_fee_bps(30)));
+    assert!(raised.is_err());
+}

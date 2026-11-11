@@ -164,6 +164,8 @@ What the contract guarantees:
 - **No stuck payments.** A rejected proof refunds at once. If MPC does not sign, `reclaim_payment` refunds the buyer after
   an hour; MPC requests expire within minutes, and a late signature for the abandoned payout is ignored.
 - **Exclusive states.** An offer being verified can be neither cancelled nor bought by someone else.
+- **No surprise fees.** The protocol fee can only be lowered, so an open offer never pays more than it showed.
+- **Bounded storage.** An offer can hold at most 6 settlements, so nobody can bloat the contract's storage through it.
 
 What you trust:
 
@@ -171,7 +173,8 @@ What you trust:
 - **The Bitcoin light client** to follow the heaviest valid chain. It checks proof of work header by header; on testnet the
   difficulty is low, so mainnet would require more confirmations (`set_min_confirmations`).
 
-This is hackathon software on testnet. It has not been audited.
+This is hackathon software on testnet. It has not had an independent audit; the self review, its findings and fixes are in
+[`docs/audit.md`](docs/audit.md).
 
 ## Run it locally
 
